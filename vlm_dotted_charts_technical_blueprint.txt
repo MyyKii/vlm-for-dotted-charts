@@ -1,0 +1,353 @@
+================================================================================
+           VLM-BASED VISUAL PATTERN DETECTION IN DOTTED CHARTS
+             Technical Architecture & Implementation Blueprint
+                          LMU Munich - WS 2026/27
+================================================================================
+
+PROJECT OVERVIEW
+--------------------------------------------------------------------------------
+Research Question:
+  Can a fine-tuned Vision-Language Model (VLM) reliably detect, locate, and 
+  explain process anomalies and operational patterns in Process Mining 
+  Dotted Charts?
+
+Primary Objectives:
+  1. Programmatically inject synthetic operational patterns into event logs.
+  2. Render Dotted Charts (SVG/PNG) and automatically compute exact pixel-space 
+     bounding boxes [ymin, xmin, ymax, xmax] for ground-truth annotations.
+  3. Fine-tune Qwen2.5-VL (3B/7B) using 4-bit QLoRA and Chain-of-Visual-Thought 
+     (<think> reasoning chains) to perform spatial grounding and pattern analysis.
+  4. Build an inference and overlay visualizer that draws annotated bounding 
+     boxes and explanations back onto unannotated Dotted Charts.
+  5. Evaluate performance on synthetic benchmarks and unseen real-world 
+     event logs (e.g., BPI Challenge datasets).
+
+
+================================================================================
+1. ARCHITECTURAL DECISIONS & TECHNICAL RATIONALE
+================================================================================
+
+1.1 Why Qwen2.5-VL (3B / 7B)?
+------------------------------
+- Dynamic Resolution & Native Aspect Ratio: Dotted charts are wide, non-square 
+  images tracking long time horizons. Qwen2.5-VL processes images natively without 
+  forced square warping (unlike older ViTs that warp to 224x224), preserving 
+  sharp point spacing and clear temporal boundaries.
+- Native Spatial Grounding: Pre-trained out-of-the-box to interpret 2D bounding 
+  boxes on a normalized integer scale of [0, 1000] in the format 
+  [ymin, xmin, ymax, xmax].
+- Fine-Tuning Ecosystem: Full support for 4-bit QLoRA (BitsAndBytes + PEFT + TRL), 
+  enabling fine-tuning of the 7B model on single GPUs with 16-24 GB VRAM.
+
+1.2 Why Synthetic Pattern Ingestion (Data Engine)?
+--------------------------------------------------
+- Zero Manual Annotation: Hand-labeling thousands of Dotted Charts with bounding 
+  boxes is prone to error and unscalable.
+- Mathematically Perfect Ground Truth: Because the Python injection script 
+  controls the modified cases, timestamps, and activity labels, it knows the 
+  exact coordinates of the pattern in data-space and can compute pixel bounding 
+  boxes automatically.
+- Infinite Scalability: Enables generation of 1,000+ training tuples across 
+  varying noise levels, color palettes, time intervals, and point densities.
+
+1.3 Why Render via SVG before PNG Conversion?
+---------------------------------------------
+- Precision Vector Calculation: SVG files store plot elements as vector path 
+  coordinates. Calculating bounding boxes via SVG nodes or Matplotlib's internal 
+  `Axes` transform guarantees mathematical accuracy before converting to 
+  rasterized PNG for VLM input.
+
+
+================================================================================
+2. END-TO-END PIPELINE ARCHITECTURE
+================================================================================
+
+ [ Raw Base Event Logs ] ---> [ Phase 1: Pattern Ingestion Engine ]
+   (XES / CSV / PM4Py)              |  Injects: Gaps, Batches, Outliers
+                                    v
+                              [ Modified Event Log + Data-Space Bounding Box ]
+                                    |
+                                    v
+                             [ Phase 2: Chart Renderer & Coordinate Mapper ]
+                                    |  Renders SVG/PNG & Transforms Coordinates
+                                    v
+                              [ Chart PNG + Normalized VLM [0..1000] BBox ]
+                                    |
+                                    v
+                             [ Phase 3: Instruction Dataset Formatter ]
+                                    |  Generates JSONL Tuples (<think> CoVT)
+                                    v
+                             [ Phase 4: QLoRA Fine-Tuning Setup ]
+                                    |  Fine-tunes Qwen2.5-VL-3B/7B
+                                    v
+                             [ Fine-Tuned Qwen2.5-VL Adapter ]
+                                    |
+                                    v
+                             [ Phase 5: Inference & Visual Overlay Engine ]
+                                    |  Parses BBoxes & Draws Interactive Overlays
+                                    v
+                             [ Phase 6: Evaluation & Benchmarking Suite ]
+                                       IoU, Precision/Recall, Real-Log Generalization
+
+
+================================================================================
+3. TEAM WORKLOAD DIVISION (2x2 STRUCTURE)
+================================================================================
+
+TEAM 1: Data Engine & Processing Pipeline
+-----------------------------------------
+- Responsibilities: Phases 1, 2, and 3.
+- Core Deliverables:
+  1. Synthetic pattern injection module (Python + PM4Py).
+  2. Matplotlib / SVG coordinate transformation pipeline (Data-Space -> VLM Pixel BBox).
+  3. Automated export script generating JSONL datasets for training/validation.
+
+TEAM 2: VLM Infrastructure, Fine-Tuning & Evaluation
+----------------------------------------------------
+- Responsibilities: Phases 4, 5, and 6.
+- Core Deliverables:
+  1. Qwen2.5-VL baseline benchmarking environment (Zero-shot evaluation).
+  2. QLoRA training script using Hugging Face TRL / SFTTrainer / PEFT.
+  3. Structured JSON output parser and visual overlay generator.
+  4. Quantitative evaluation suite (Bounding Box IoU, mAP, and text quality).
+
+
+================================================================================
+4. PHASE-BY-PHASE DETAILED IMPLEMENTATION GUIDE
+================================================================================
+
+PHASE 1: EVENT LOG PROCESSING & PATTERN INGESTION ENGINE
+--------------------------------------------------------------------------------
+Goal: Take a clean baseline event log and inject distinct, controllable 
+process anomalies.
+
+1. Base Event Logs:
+   - Use clean synthetic logs generated via PM4Py/Cortado or filtered real logs 
+     (e.g., BPI Challenge 2012/2017).
+   - Ensure logs are loaded as PM4Py EventLogs or pandas DataFrames containing 
+     `case:concept:name`, `concept:name`, and `time:timestamp`.
+
+2. Pattern Catalog Implementation:
+   Write dedicated Python functions for each target pattern:
+   a) Temporal Gap (System Outage / Non-Working Hours):
+      - Method: Shift all events occurring after timestamp T_start forward by 
+        delta_t (e.g., 3 days). No events occur within [T_start, T_start + delta_t].
+      - Ground Truth Bounds: xmin = T_start, xmax = T_start + delta_t, ymin = min_case, ymax = max_case.
+
+   b) Batching (Synchronized Activity Execution):
+      - Method: Select N cases where activity 'A' occurs within a time window. 
+        Overwrite the timestamp of activity 'A' across all N cases to a single 
+        fixed datetime (e.g., every weekday at 14:00).
+      - Ground Truth Bounds: xmin = batch_time - margin, xmax = batch_time + margin, 
+        ymin = min(affected_cases), ymax = max(affected_cases).
+
+   c) Outliers (Stuck Cases / Delays):
+      - Method: Select a small fraction (1-2%) of cases and add an artificial 
+        delay (e.g., +20 days) between two sequential activities.
+      - Ground Truth Bounds: Exact bounding box enclosing the delayed dot(s).
+
+   d) Workload Spikes / Clusters:
+      - Method: Inject a high volume of new case arrivals within a short 
+        time frame.
+
+3. CRITICAL RULE - Causal Integrity:
+   - When shifting timestamps for a case, ALWAYS shift all subsequent 
+     events in that specific case by the same offset. 
+   - Failure to do so will result in impossible process executions (e.g., Shipping 
+     occurring before Order Placement).
+
+--------------------------------------------------------------------------------
+PHASE 2: CHART RENDERING & COORDINATE CONVERSION ENGINE
+--------------------------------------------------------------------------------
+Goal: Render the modified log into a Dotted Chart PNG and map the data-space 
+pattern bounds into Qwen2.5-VL's normalized [0..1000] integer bounding box scale.
+
+1. Fixed Rendering Specifications:
+   - X-Axis: Time / Timestamp (`time:timestamp`).
+   - Y-Axis: Cases (`case:concept:name`), sorted STRICTLY by case arrival time.
+   - Color: Activity (`concept:name`).
+   - Plotting parameters: Fixed DPI (e.g., 300), marker size `s=3`, transparency `alpha=0.6`.
+
+2. Exact Coordinate Mapping Formula:
+   Matplotlib plots contain margins, legends, and axis tick labels. You MUST 
+   transform data-space coordinates (time t, case index c) into image pixel 
+   coordinates using the Matplotlib Axes transform (`ax.transData`).
+
+   Step-by-Step Transformation:
+   1) Convert Data Bounds to Matplotlib Data Coordinates:
+      x_data = matplotlib.dates.date2num(target_datetime)
+      y_data = case_index_in_sorted_plot
+
+   2) Transform Data Coordinates to Display Pixels:
+      pixel_x, pixel_y = ax.transData.transform((x_data, y_data))
+
+   3) Invert Y-Axis (Matplotlib origin is Bottom-Left, VLM origin is Top-Left):
+      image_height = fig.bbox.height
+      vlm_pixel_y = image_height - pixel_y
+      vlm_pixel_x = pixel_x
+
+   4) Normalize to Qwen2.5-VL's [0, 1000] Integer Scale:
+      xmin_norm = int(1000 * (vlm_pixel_xmin / image_width))
+      xmax_norm = int(1000 * (vlm_pixel_xmax / image_width))
+      ymin_norm = int(1000 * (vlm_pixel_ymin / image_height))
+      ymax_norm = int(1000 * (vlm_pixel_ymax / image_height))
+
+   5) Construct Final Qwen Bounding Box:
+      box_2d = [ymin_norm, xmin_norm, ymax_norm, xmax_norm]
+
+--------------------------------------------------------------------------------
+PHASE 3: INSTRUCTION DATASET FORMATTER (JSONL)
+--------------------------------------------------------------------------------
+Goal: Package chart images, metadata, prompts, and reasoning chains into the 
+JSONL instruction format required by Qwen2.5-VL.
+
+1. Prompt Engineering Strategy:
+   - Do NOT dump raw event logs (50,000+ CSV lines) into the prompt text window. 
+     This exceeds context limits and dilutes vision-language reasoning.
+   - Include compact summary metadata (Date range, total cases, activity legend).
+
+2. Target Output Format (Chain-of-Visual-Thought / CoVT):
+   Each completion MUST contain a `<think>` tag detailing step-by-step 
+   visual reasoning before providing the final JSON box output.
+
+3. Example JSONL Training Entry:
+{
+  "id": "sample_0001",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "image", "image": "path/to/chart_0001.png"},
+        {
+          "type": "text", 
+          "text": "Analyze this Process Mining Dotted Chart. The X-axis represents time from 2026-11-01 to 2026-11-15. The Y-axis represents cases sorted by arrival time. Identify operational patterns, provide bounding boxes, and explain the root cause."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "<think>\n1. Inspecting the X-axis: A clear vertical gap exists between 2026-11-04 and 2026-11-07 where no dots are plotted across all cases.\n2. This indicates a period of complete inactivity across the process (Temporal Gap / System Outage).\n3. Mapping visual boundaries to coordinates: Y-range spans all cases [150, 950], X-range covers the period [300, 520].\n</think>\n```json\n[\n  {\n    \"box_2d\": [150, 300, 950, 520],\n    \"label\": \"Temporal Gap\",\n    \"explanation\": \"A 3-day complete halt in event processing occurring between Nov 04 and Nov 07 across all active cases.\"\n  }\n]\n```"
+    }
+  ]
+}
+
+--------------------------------------------------------------------------------
+PHASE 4: VLM FINE-TUNING PIPELINE (QLoRA)
+--------------------------------------------------------------------------------
+Goal: Fine-tune Qwen2.5-VL-3B-Instruct (prototyping) and 7B-Instruct (final) 
+using 4-bit quantization and Parameter-Efficient Fine-Tuning (PEFT).
+
+1. Training Stack:
+   - Framework: Hugging Face `transformers`, `peft`, `bitsandbytes`, `trl` (SFTTrainer / VLM Trainer).
+   - Base Model: `Qwen/Qwen2.5-VL-7B-Instruct`
+   - Quantization: 4-bit NormalFloat (NF4) via `BitsAndBytesConfig`.
+
+2. LoRA Target Modules:
+   - Apply LoRA adapters to both Language Model and Vision Projection layers:
+     `target_modules = ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]`
+   - Config: `r = 16`, `lora_alpha = 32`, `lora_dropout = 0.05`.
+
+3. Recommended Hyperparameters:
+   - Learning Rate: 1e-4 to 2e-4 (Cosine scheduler with warmup).
+   - Batch Size: Per-device batch size = 2 or 4, Gradient Accumulation Steps = 4.
+   - Epochs: 3 to 5 epochs.
+   - Precision: `bf16 = True` (or `fp16` depending on GPU architecture).
+
+--------------------------------------------------------------------------------
+PHASE 5: INFERENCE, PARSING & VISUAL OVERLAY ENGINE
+--------------------------------------------------------------------------------
+Goal: Pass unseen Dotted Charts to the fine-tuned model, parse its JSON response, 
+and render color-coded bounding box overlays directly on the chart image.
+
+1. Output Parsing:
+   - Extract content inside the ````json ... ```` code block.
+   - Parse `box_2d` coordinates `[ymin, xmin, ymax, xmax]`.
+
+2. Coordinate Denormalization (VLM 1000-scale -> Original Image Pixels):
+   - `orig_xmin = int((xmin_norm / 1000) * image_width)`
+   - `orig_ymin = int((ymin_norm / 1000) * image_height)`
+   - `orig_xmax = int((xmax_norm / 1000) * image_width)`
+   - `orig_ymax = int((ymax_norm / 1000) * image_height)`
+
+3. Drawing Visual Overlays:
+   - Use OpenCV or PIL (`ImageDraw`) to overlay bounding boxes with color codes:
+     - Red: Outliers / Anomalies
+     - Orange: Temporal Gaps
+     - Blue: Batching
+     - Purple: Workload Spikes
+   - Render semi-transparent fill bounding boxes and text labels above the boxes.
+
+--------------------------------------------------------------------------------
+PHASE 6: EVALUATION & BENCHMARKING SUITE
+--------------------------------------------------------------------------------
+Goal: Quantify model performance on synthetic test sets and unseen real-world 
+BPI Challenge event logs.
+
+1. Spatial Detection Metric - Intersection over Union (IoU):
+   IoU = Area(Prediction \cap GroundTruth) / Area(Prediction \cup GroundTruth)
+   - Benchmark threshold: Consider a detection correct if IoU >= 0.5.
+
+2. Classification Metrics:
+   - Compute Precision, Recall, and F1-Score for each pattern class 
+     (Gap, Batching, Outlier, Cluster).
+
+3. Baseline Comparison:
+   - Compare Fine-Tuned Qwen2.5-VL against:
+     1. Zero-shot base Qwen2.5-VL.
+     2. Zero-shot GPT-4o / Claude 3.5 Sonnet (API-based baseline).
+
+
+================================================================================
+5. FIVE CRITICAL PITFALLS TO AVOID
+================================================================================
+
+1. Coordinate Offset Error (Ignoring Plot Padding):
+   - Issue: Calculating pixel coordinates based on data values without factoring 
+     in Matplotlib axis labels, titles, and legends.
+   - Prevention: Always use `ax.transData.transform()` to convert data values 
+     directly to display pixel space before normalizing.
+
+2. Unsorted Y-Axis (Dynamic Case Reordering):
+   - Issue: If Case IDs are sorted arbitrarily in one plot and by arrival time in 
+     another, identical event logs produce completely different visual charts.
+   - Prevention: Lock the rendering pipeline to a single, deterministic sorting 
+     convention (e.g., Case Arrival Time).
+
+3. Violation of Event Sequence Logic:
+   - Issue: Injecting an artificial delay into an event without shifting subsequent 
+     events in the same case.
+   - Prevention: Implement automated logical assertions (`assert timestamp_n >= timestamp_{n-1}`) 
+     before rendering.
+
+4. Prompt Context Overload:
+   - Issue: Feeding thousands of raw CSV rows into the text prompt.
+   - Prevention: Rely on the VLM's vision encoder for pattern detection and provide 
+     only high-level dataset summary statistics in text format.
+
+5. Visual Overlap / High Point Density Clutter:
+   - Issue: 100,000+ points rendering into a solid, uninterpretable color block.
+   - Prevention: Adjust marker size (`s=2` to `s=4`) and alpha transparency 
+     (`alpha=0.4` to `0.6`) so point density variation remains visually readable.
+
+
+================================================================================
+6. ESSENTIAL LITERATURE & REFERENCES
+================================================================================
+
+1. Dotted Charts Foundation:
+   - Song, M., & van der Aalst, W. M. P. (2007). "Supporting Process Mining by 
+     Showing Events at a Glance." Building Integration Capabilities in Information 
+     Systems.
+
+2. Vision-Language Model Architecture:
+   - Alibaba Cloud (2025). "Qwen2.5-VL Technical Report." 
+     https://github.com/QwenLM/Qwen2.5-VL
+
+3. Chart Understanding Benchmarks:
+   - Masry et al. (2025). "ChartQAPro: A Benchmark for Complex Visual Reasoning on Charts."
+   - Masry et al. (2024). "ChartInstruct: Instruction Tuning for Visual Chart Understanding."
+
+4. Process Mining Libraries & Tools:
+   - PM4Py (Process Mining for Python): https://processintelligence.solutions/pm4py
+   - Cortado Interactive Process Mining: https://github.com/cortado-tool/cortado
+================================================================================
