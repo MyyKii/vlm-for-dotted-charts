@@ -1,13 +1,13 @@
 # VLM-Based Visual Pattern Detection in Dotted Charts
 
-**Technical Architecture & Implementation Blueprint**  
+**Technical Architecture & Implementation Blueprint**
 LMU Munich · Winter Semester 2026/27
 
 > **Status:** Initial working blueprint. It describes the proposed architecture, not a finalized research protocol. Decisions marked **Proposed / To validate** require empirical or team validation.
 
 ## Project Overview
 
-**Research question**  
+**Research question**
 Can a fine-tuned Vision-Language Model (VLM) reliably detect, locate, and explain process anomalies and operational patterns in Process Mining Dotted Charts?
 
 ### Primary Objectives
@@ -64,35 +64,7 @@ flowchart TD
 
 ---
 
-## 3. Team Workload Division (2 × 2)
-
-### Team 1 — Data Engine & Processing Pipeline
-
-**Responsible for:** Phases 1–3.
-
-**Deliverables:**
-
-1. Synthetic pattern injection module (Python + PM4Py).
-2. Matplotlib/SVG coordinate mapping from data-space to final image-space bounding boxes.
-3. Automated export of annotated datasets for training and validation.
-4. **Proposed:** Basic checks for event-order integrity, box validity, and reproducible train/validation/test grouping.
-
-### Team 2 — VLM Infrastructure, Fine-Tuning & Evaluation
-
-**Responsible for:** Phases 4–6.
-
-**Deliverables:**
-
-1. Zero-shot Qwen2.5-VL baseline evaluation environment.
-2. QLoRA training script using Hugging Face TRL/SFTTrainer and PEFT.
-3. Structured JSON response parser and visual overlay generator.
-4. Quantitative evaluation suite (bounding-box IoU, detection precision/recall, and explanation quality).
-
-**Shared interface:** Both teams agree on the annotation schema and coordinate convention before large-scale dataset generation.
-
----
-
-## 4. Phase-by-Phase Implementation Guide
+## 3. Phase-by-Phase Implementation Guide
 
 ### Phase 1 — Event Log Processing & Pattern Injection Engine
 
@@ -334,16 +306,3 @@ Intersection over Union:
 7. **Training reference:** [Hugging Face TRL — SFTTrainer](https://huggingface.co/docs/trl/sft_trainer).
 
 ---
-
-## 7. Open Research & Engineering Decisions
-
-These items are **not** settled by this blueprint:
-
-- Dataset choice and the split between fully synthetic, modified real, and unmodified real logs.
-- Pattern catalog, boundary definitions, and the real-data annotation protocol.
-- Full-chart versus crop inputs, multiple chart dimensions, and chart-style variation.
-- Whether to include metadata or explanatory reasoning as model input/output.
-- Exact image resolution, LoRA target modules, hyperparameters, model size, and GPU allocation.
-- Evaluation criteria for ambiguous patterns and natural anomalies.
-
-The first implementation priority is a small, reproducible end-to-end sample: **inject one pattern → render chart → verify annotation → run zero-shot inference → parse and overlay prediction**.

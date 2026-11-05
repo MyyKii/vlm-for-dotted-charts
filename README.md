@@ -37,8 +37,8 @@ The repository separates **source code (`src/`)** from **datasets and generated 
 ```text
 vlm-for-dotted-charts/
 ├── docs/
-│   ├── blueprint.md         # Technical architecture and implementation plan
-│   └── decisions.md         # Shared project decisions
+│   ├── blueprint.md         # Research goals, architecture, and methodology
+│   └── project_log.md       # Progress, decisions, challenges, and tasks
 ├── src/                     # Python source code
 │   ├── data/                # Event-log processing and pattern injection
 │   ├── evaluation/          # Model evaluation and result analysis
@@ -62,7 +62,8 @@ vlm-for-dotted-charts/
 
 | Directory | Purpose |
 |---|---|
-| `docs/` | Technical documentation, research plans, and agreed decisions. |
+| `docs/blueprint.md` | Overarching research objectives, conceptual architecture, methodology, and evaluation strategy. |
+| `docs/project_log.md` | Living record of individual progress, team meetings, decisions, encountered problems, and assigned next steps. |
 | `src/data/` | Code for loading, preprocessing, and injecting patterns into event logs. |
 | `src/rendering/` | Code for generating Dotted Charts and mapping pattern locations to image coordinates. |
 | `src/training/` | Code for preparing training inputs and fine-tuning Qwen2.5-VL. |
@@ -73,7 +74,9 @@ vlm-for-dotted-charts/
 | `data/generated/annotations/` | Ground-truth labels, bounding boxes, and references to the corresponding chart images. |
 | `tests/` | Automated tests for the processing, rendering, training, and evaluation components. |
 
-**Note:** The `src/` directory contains version-controlled Python code, while `data/` contains input datasets and generated artifacts. Large datasets, model weights, and training outputs are excluded from Git through `.gitignore`. The data directories can be populated locally or recreated by the pipeline.
+**Documentation:** The [Technical Blueprint](docs/blueprint.md) defines the project's overarching research direction and conceptual approach. The [Project Log](docs/project_log.md) documents actual progress, findings, decisions, problems, and responsibilities throughout the project. Team members update the log as they complete work and during team meetings.
+
+**Data management:** The `src/` directory contains version-controlled Python code, while `data/` contains input datasets and generated artifacts. Large datasets, model weights, and training outputs are excluded from Git through `.gitignore`. The data directories can be populated locally or recreated by the pipeline.
 
 ## Getting Started
 
@@ -166,51 +169,55 @@ make cov     # Run tests with coverage
 
 ### Working Together
 
-For experimental features and changes to shared code, use a dedicated branch:
+For experimental features and changes to shared code, use a dedicated branch. Whenever possible, reference the corresponding **task ID (`T-XX`)** from the [Project Log](docs/project_log.md) to link implementation work to its assigned task.
 
 ```bash
 git switch main
 git pull
-git switch -c feat/pattern-injection
+git switch -c feat/T-02-pattern-injection
 ```
 
 Implement, test, commit, and push your work:
 
 ```bash
 git add <CHANGED_FILES>
-git commit -m "feat: add initial pattern injection prototype"
-git push -u origin feat/pattern-injection
+git commit -m "feat(data): add temporal gap injection (T-02)"
+git push -u origin feat/T-02-pattern-injection
 ```
 
-Then open a pull request for review or integration. The team may allow small documentation or configuration fixes directly on `main`, but **research decisions that change datasets, annotation schemas, or evaluation criteria should be explicitly agreed upon**.
+Then open a pull request for review or integration, referencing the relevant task (`T-XX`) and, where applicable, the underlying research decision (`D-XX`).
+
+The team may allow small documentation or configuration fixes directly on `main`. However, **research decisions affecting datasets, annotation schemas, training strategies, or evaluation criteria must be discussed and documented in the Project Log**.
 
 ### Branch Naming Conventions
 
-Use lowercase, descriptive branch names grouped by purpose. Avoid personal names or ambiguous labels such as `name_test_123`.
+Use lowercase, descriptive branch names grouped by purpose. Include the corresponding task ID when available. Avoid personal names or ambiguous labels such as `name_test_123`.
 
-**Format:** `<type>/<short-description>`
+**Format:** `<type>/<task-id>-<short-description>`
 
 | Type | Purpose | Example |
-| --- | --- | --- |
-| `feat` | New functionality | `feat/pattern-injection` |
-| `fix` | Bug fixes | `fix/bbox-coordinate-mapping` |
+|---|---|---|
+| `feat` | New functionality | `feat/t-02-pattern-injection` |
+| `fix` | Bug fixes | `fix/t-03-bbox-coordinate-mapping` |
 | `chore` | Maintenance, tooling, or dependencies | `chore/update-dependencies` |
-| `refactor` | Code restructuring without changing behavior | `refactor/event-log-parser` |
+| `refactor` | Code restructuring without changing behavior | `refactor/t-01-event-log-parser` |
 | `docs` | Documentation work | `docs/update-blueprint` |
+
+Task IDs are optional for changes that are not associated with an assigned task.
 
 ### Commit Naming (Conventional Commits)
 
-Follow the [Conventional Commits](https://www.conventionalcommits.org/) convention for a consistent and readable Git history. It also supports automated changelog tools if the team chooses to introduce them later.
+Follow the [Conventional Commits](https://www.conventionalcommits.org/) convention for a consistent and readable Git history.
 
-**Format:** `<type>(<optional-scope>): <short imperative description>`
+**Format:** `<type>(<optional-scope>): <short imperative description> (T-XX)`
 
 | Type | Description | Example |
-| --- | --- | --- |
-| `feat` | A new feature | `feat(data): add temporal gap injection` |
-| `fix` | A bug fix | `fix(rendering): correct bounding box offsets` |
-| `docs` | Documentation only | `docs(blueprint): clarify annotation format` |
-| `refactor` | Code restructuring without changing behavior | `refactor(data): simplify event log loading` |
-| `test` | Tests added or corrected | `test(rendering): add coordinate mapping tests` |
+|---|---|---|
+| `feat` | A new feature | `feat(data): add temporal gap injection (T-02)` |
+| `fix` | A bug fix | `fix(rendering): correct bounding box offsets (T-03)` |
+| `docs` | Documentation only | `docs(blueprint): clarify annotation approach (D-02)` |
+| `refactor` | Code restructuring without changing behavior | `refactor(data): simplify event log loading (T-01)` |
+| `test` | Tests added or corrected | `test(rendering): add coordinate mapping tests (T-03)` |
 | `chore` | Maintenance or dependency updates | `chore(deps): update development dependencies` |
 | `ci` | CI/CD configuration | `ci: add pull request checks` |
 
@@ -220,7 +227,17 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) conventi
 2. Aim for a subject line of no more than 50–72 characters.
 3. Start the description after the colon with a lowercase letter.
 4. Do not end the subject line with a period.
-5. Avoid vague messages such as `fixed stuff`.
+5. Reference the relevant task ID (`T-XX`) when available. Use a decision ID (`D-XX`) when the change directly implements or documents a research decision.
+6. Avoid vague messages such as `fixed stuff`.
+
+**Project Log integration:**
+
+- **Task IDs (`T-XX`)** identify assigned work and connect branches, commits, pull requests, and individual progress updates.
+- **Decision IDs (`D-XX`)** reference research or architectural decisions and their rationale.
+- After completing meaningful work, update the corresponding progress entry in `docs/project_log.md` with the outcome and relevant commit or pull request.
+- Decisions and new task assignments are recorded during team meetings, preserving the project's development history.
+
+This allows the team to trace **why a change was made, who worked on it, and which task or decision it relates to**.
 
 ## Current Priorities
 
