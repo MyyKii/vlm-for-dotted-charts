@@ -1,19 +1,29 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "vlm-for-dotted-charts"
 version = "0.1.0"
 description = "Fine-tuning Vision-Language Models for Dotted Chart Understanding in Process Mining"
 requires-python = ">=3.11"
+
 dependencies = [
+    # Deep Learning
     "torch",
     "torchvision",
+
+    # Vision-Language Models and Fine-Tuning
     "transformers",
     "accelerate",
     "peft",
     "trl",
-    "datasets",
     "bitsandbytes",
-    "pillow",
     "qwen-vl-utils",
+
+    # Data Processing
+    "datasets",
+    "pillow",
 ]
 
 [dependency-groups]
@@ -23,6 +33,10 @@ dev = [
     "ruff",
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
 [tool.ruff]
 line-length = 100
 
@@ -31,5 +45,5 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src"]
 addopts = "-v"

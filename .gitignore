@@ -164,13 +164,13 @@ dmypy.json
 cython_debug/
 
 # PyCharm
-# .idea/
+.idea/
 
 # Abstra
 .abstra/
 
 # Visual Studio Code
-# .vscode/
+.vscode/
 tempCodeRunnerFile.py
 
 # Ruff
@@ -227,7 +227,8 @@ __marimo__/
 *.pth
 
 # Training outputs
-/outputs/
+/outputs/*
+!/outputs/.gitkeep
 /results/
 /training_logs/
 

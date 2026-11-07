@@ -54,8 +54,7 @@ vlm-for-dotted-charts/
 ├── .gitignore               # Files excluded from version control
 ├── makefile                 # Formatting, linting, testing, coverage
 ├── pyproject.toml           # Project metadata and tool configuration
-├── README.md                # Project documentation
-└── requirements.txt         # Python dependencies
+└── README.md                # Project documentation
 ```
 
 ### Directory Overview

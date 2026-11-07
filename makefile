@@ -1,3 +1,5 @@
+.PHONY: check ruff cov
+
 check:
 	ruff format
 	ruff check --fix
