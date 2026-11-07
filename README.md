@@ -227,17 +227,8 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) conventi
 2. Aim for a subject line of no more than 50–72 characters.
 3. Start the description after the colon with a lowercase letter.
 4. Do not end the subject line with a period.
-5. Reference the relevant task ID (`T-XX`) when available. Use a decision ID (`D-XX`) when the change directly implements or documents a research decision.
+5. Reference the relevant task to the issues when available. 
 6. Avoid vague messages such as `fixed stuff`.
-
-**Project Log integration:**
-
-- **Task IDs (`T-XX`)** identify assigned work and connect branches, commits, pull requests, and individual progress updates.
-- **Decision IDs (`D-XX`)** reference research or architectural decisions and their rationale.
-- After completing meaningful work, update the corresponding progress entry in `docs/project_log.md` with the outcome and relevant commit or pull request.
-- Decisions and new task assignments are recorded during team meetings, preserving the project's development history.
-
-This allows the team to trace **why a change was made, who worked on it, and which task or decision it relates to**.
 
 ## Current Priorities
 
