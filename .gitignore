@@ -1,3 +1,10 @@
+
+# Data files
+*.csv
+*.xes
+*.xml
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -193,10 +200,6 @@ __marimo__/
 
 # Datasets and generated training data (repository root only)
 # Keep .gitkeep files to preserve the directory structure.
-
-# Original event logs
-/data/raw/*
-!/data/raw/.gitkeep
 
 # Processed event logs
 /data/processed/*
