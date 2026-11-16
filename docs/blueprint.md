@@ -1,308 +1,728 @@
 # VLM-Based Visual Pattern Detection in Dotted Charts
 
 **Technical Architecture & Implementation Blueprint**
+
 LMU Munich · Winter Semester 2026/27
 
-> **Status:** Initial working blueprint. It describes the proposed architecture, not a finalized research protocol. Decisions marked **Proposed / To validate** require empirical or team validation.
+> **Status:** Working research blueprint. This document describes the proposed architecture and research methodology, not a finalized experimental protocol. Specific pattern definitions, rendering strategies, annotation rules, model configurations, and evaluation settings require empirical validation.
+>
+> Detailed implementation tasks are maintained separately. Repository conventions, testing requirements, and development safeguards are defined in `AGENTS.md`.
 
 ## Project Overview
 
-**Research question**
-Can a fine-tuned Vision-Language Model (VLM) reliably detect, locate, and explain process anomalies and operational patterns in Process Mining Dotted Charts?
+### Research Question
+
+To what extent can a fine-tuned Vision-Language Model (VLM) **detect, localize, and explain visual operational patterns** in previously unseen Process Mining Dotted Charts?
+
+The project investigates whether controlled synthetic training data can improve the model's ability to recognize and spatially ground patterns across different event logs and chart representations.
 
 ### Primary Objectives
 
-1. Programmatically inject synthetic operational patterns into event logs.
-2. Render Dotted Charts (SVG/PNG) and automatically derive bounding-box ground truth in image coordinates (`[xmin, ymin, xmax, ymax]`).
-3. Fine-tune Qwen2.5-VL (3B/7B) using 4-bit QLoRA for spatial grounding and pattern analysis. **Proposed:** Evaluate whether short evidence-based explanations or explicit reasoning traces improve performance.
-4. Build an inference and overlay visualizer to draw predicted bounding boxes and explanations on previously unseen charts.
-5. Evaluate performance on synthetic benchmarks and unseen real-world event logs (e.g., BPI Challenge datasets).
+1. **Event Log Preparation:** Collect and standardize real-world and, where useful, synthetic event logs using PM4Py and Pandas.
+2. **Pattern Synthesis:** Generate controlled visual patterns such as temporal gaps, batching, case delays/outliers, and workload spikes while preserving their provenance.
+3. **Chart Generation:** Produce visually diverse Dotted Charts with reproducible rendering configurations.
+4. **Ground-Truth Annotation:** Automatically derive and validate pattern-instance labels, bounding boxes, and visibility information.
+5. **VLM Fine-Tuning:** Establish a zero-shot baseline and fine-tune Qwen3-VL-8B-Instruct using QLoRA. Consider Qwen3-VL-32B-Instruct when GPU resources permit.
+6. **Inference & Evaluation:** Detect, localize, and explain patterns in unseen charts, evaluating classification, spatial grounding, and generalization.
+7. **Experiment Tracking:** Track meaningful training and evaluation experiments using MLflow.
 
-**Scope clarification:** Visual observations (e.g., a gap in events) do not by themselves establish an operational root cause (e.g., a system outage). The initial task is *pattern detection, localization, and evidence-based interpretation*.
+### Research Scope
+
+The project focuses on **visual pattern recognition rather than causal process analysis**.
+
+A visible temporal gap does not necessarily indicate a system outage; synchronized events do not necessarily prove a specific resource constraint. Explanations should describe observable visual evidence without attributing unsupported operational causes.
+
+**Core research hypothesis:** Controlled pattern injection, visual diversification, and reliable annotations can enable effective VLM adaptation for Dotted-Chart pattern recognition.
+
+The impact of these factors must be evaluated experimentally rather than assumed.
 
 ---
 
 ## 1. Architectural Decisions & Technical Rationale
 
-### 1.1 Why Qwen2.5-VL (3B / 7B)?
+### 1.1 Why Qwen3-VL?
 
-- **Dynamic image resolution and aspect ratio:** Dotted Charts are often wide, non-square images. Qwen2.5-VL supports variable-resolution visual inputs rather than requiring a fixed square image. **To validate:** Image resizing and token limits may still erase small, densely packed dots.
-- **Spatial grounding:** Qwen2.5-VL can output 2D points and bounding boxes. Its native grounding convention uses **absolute coordinates relative to the processed/resized image**, typically in `[xmin, ymin, xmax, ymax]` order. It does **not** intrinsically require coordinates normalized to `[0, 1000]` (that convention is associated with Qwen2-VL and some other interfaces). See [Qwen's model documentation](https://github.com/QwenLM/Qwen2.5-VL) and [Qwen grounding guidance](https://docs.qwencloud.com/developer-guides/multimodal/vision).
-- **Fine-tuning ecosystem:** Hugging Face Transformers, PEFT, TRL, and bitsandbytes provide the components for 4-bit QLoRA. **To validate:** Whether 3B/7B training fits a given GPU depends on image resolution, token count, trainable modules, batch size, and other configuration choices. A 16–24 GB GPU is **not** a guaranteed fit for 7B.
+The primary model family is **Qwen3-VL**, with two candidate sizes:
 
-### 1.2 Why Synthetic Pattern Injection (Data Engine)?
+| Model | Intended role |
+| --- | --- |
+| `Qwen/Qwen3-VL-8B-Instruct` | Primary model for zero-shot evaluation, initial QLoRA fine-tuning, and iterative experiments |
+| `Qwen/Qwen3-VL-32B-Instruct` | Optional larger model for additional experiments when sufficient compute is available |
 
-- **Scalable supervision:** An injection script can record exactly which events, cases, timestamps, and activities were altered.
-- **Reproducible candidate annotations:** Recorded interventions can be mapped into chart coordinates; the **visual extent and semantic appropriateness** of each label must still be checked, especially for gaps and delays.
-- **Controlled variation:** Generate examples at different noise levels, temporal scales, activity distributions, chart styles, and point densities.
-- **Proposed evaluation safeguard:** Include unaffected charts and realistic background patterns so that the model cannot assume every chart contains an injected anomaly.
+**Technical rationale:**
 
-### 1.3 Why Render via SVG before PNG Conversion?
+- **Dynamic-resolution image processing:** Supports variable image sizes and aspect ratios, which is useful for wide, densely populated Dotted Charts.
+- **Fine-grained visual representations:** Features such as DeepStack are promising for recognizing spatial structures, although they do not guarantee preservation of individual small dots.
+- **Spatial grounding:** Qwen3-VL supports bounding-box outputs using normalized coordinates in the range `[0, 1000]`.
+- **Fine-tuning ecosystem:** Hugging Face Transformers, PEFT, TRL, Accelerate, and compatible 4-bit quantization provide a potential QLoRA training stack.
 
-- **Vector outputs:** SVG can preserve graphical elements and help inspect rendering geometry.
-- **Coordinate alignment:** Matplotlib's `ax.transData` can transform data-space locations into display coordinates. SVG is **optional**, not a prerequisite for accurate mapping.
-- **Critical requirement:** Verify bounding boxes against the **final exported PNG**, accounting for figure layout, cropping, DPI, scaling, and the model's image preprocessing.
+**Important limitations:**
+
+- Input resizing, visual-token limits, and dense plotting may still reduce pattern visibility.
+- Larger model size does not necessarily imply better Dotted-Chart detection or localization.
+- Actual GPU requirements depend on image resolution, visual-token count, batch size, trainable modules, precision, and training configuration.
+
+**Hardware feasibility:** GPU selection and QLoRA configuration must be validated through small multimodal training tests before full experiments.
+
+Older VLMs, including Qwen2.5-VL, may be considered as optional external baselines but are not part of the primary implementation strategy.
+
+### 1.2 Why Controlled Pattern Injection?
+
+Obtaining large numbers of Dotted Charts with manually annotated visual patterns is expensive.
+
+Instead, we propose generating training examples from event logs through controlled modifications.
+
+**Advantages:**
+
+- **Scalability:** Many pattern variants can be generated from a limited number of source logs.
+- **Controlled supervision:** Injection parameters identify which events, cases, and time intervals were modified.
+- **Diversity:** Pattern location, intensity, frequency, duration, and interactions can be varied systematically.
+- **Reproducibility:** Each modification can be reconstructed using its configuration, random seed, and source-log provenance.
+
+Real event logs provide realistic background characteristics such as event densities, activity distributions, and case durations. Model-based simulation can provide additional controlled examples when required.
+
+**Methodological consideration:** Strict process consistency is not the primary objective. Intentional process deviations are acceptable when they produce plausible visual patterns and are explicitly documented.
+
+However, injection metadata provides only **candidate annotations**. The final visual manifestation must be validated after rendering.
+
+### 1.3 Why PM4Py with an Optional Custom Renderer?
+
+**PM4Py** is the primary library for event-log processing and the initial Dotted-Chart rendering reference.
+
+Its classical Dotted-Chart implementation uses Graphviz/Neato and does not directly expose Matplotlib coordinate transformations.
+
+For training, exact event-to-pixel relationships are particularly important.
+
+**Proposed rendering strategy:**
+
+1. Generate reference Dotted Charts using PM4Py.
+2. Investigate whether its renderer provides sufficiently accurate and reproducible geometry.
+3. If necessary, implement a deterministic Matplotlib renderer with explicit coordinate tracking.
+4. Validate final image geometry and bounding boxes independently of the renderer.
+
+PM4Py remains the central Process Mining library even if Matplotlib is used for training-image generation.
+
+**Image format:** PNG is the primary model input. SVG may be used when helpful for inspecting geometry but is not mandatory.
+
+### 1.4 Why Modular Data Synthesis?
+
+Inspired by synthetic chart-understanding research, data generation is separated into:
+
+- **Source diversity:** Different event logs and process characteristics.
+- **Pattern diversity:** Different pattern classes, positions, intensities, and combinations.
+- **Visual diversity:** Different chart layouts, densities, time windows, and styles.
+- **Annotation quality:** Accurate pattern labels, visibility assessment, and spatial localization.
+- **Training-data quality:** Valid, balanced, and reproducible supervised examples.
+
+Different views of the same log, such as full charts and crops, should initially be stored as **separate training samples**, not combined into multi-subplot images.
+
+The effect of each diversity dimension is an experimental question.
 
 ---
 
 ## 2. End-to-End Pipeline Architecture
-
 ```mermaid
 flowchart TD
-    A["Raw Event Logs (XES / CSV / PM4Py)"] --> B["1. Pattern Injection Engine"]
-    B --> C["Modified Log + Injection Metadata"]
-    C --> D["2. Chart Renderer + Coordinate Mapper"]
-    D --> E["PNG + Ground-Truth Boxes"]
-    E --> F["3. Instruction Dataset Formatter"]
-    F --> G["4. QLoRA Fine-Tuning"]
-    G --> H["Fine-Tuned Qwen2.5-VL Adapter"]
-    H --> I["5. Inference + Overlay"]
-    I --> J["6. Evaluation + Benchmarking"]
+    A["Raw Event Logs: XES / CSV / Synthetic"] --> B["1. Event Log Collection & Processing"]
+    B --> C["Validated Logs + Provenance"]
+    C --> D["2. Controlled Pattern Injection"]
+    D --> E["Modified Logs + Injection Metadata"]
+    E --> F["3. Dotted Chart Rendering & Diversification"]
+    F --> G["PNG Images + Rendering Metadata"]
+    G --> H["4. Annotation & Quality Control"]
+    E --> H
+    H --> I["Verified Ground-Truth Dataset"]
+    I --> J["5. VLM Instruction Dataset"]
+    J --> K["Zero-Shot Baseline"]
+    J --> L["6. Qwen3-VL QLoRA Fine-Tuning"]
+    L --> M["7. Inference & Visual Overlay"]
+    K --> N["8. Evaluation & Benchmarking"]
+    M --> N
+    L -.-> O["MLflow Experiment Tracking"]
+    N -.-> O
 ```
+### Data Contracts
 
-**Data interface principle:** Store a model-independent annotation record (chart path, original image dimensions, view settings, pattern classes, bounding boxes, source-log/split identifiers). Generate the model-specific JSONL/chat format from this record. Never discard the original coordinates or transformation metadata.
+The pipeline must preserve a verifiable relationship between:
+```text
+Original Dataset
+    ↓
+Source Event Log
+    ↓
+Modified Event Log
+    ↓
+Rendered Chart / View
+    ↓
+Ground-Truth Annotation
+    ↓
+VLM Training Sample
+    ↓
+Model / Experiment Run
+```
+Canonical annotations must remain **model-independent**.
+
+They should contain source identifiers, chart/view identifiers, image dimensions, rendering parameters, pattern-instance information, visibility status, and bounding boxes in pixel coordinates.
+
+Model-specific training formats are derived from these records rather than replacing them.
+
+
+### Data Storage Formats
+
+| Format | Purpose | Typical location |
+| --- | --- | --- |
+| `.xes` / `.csv` | Immutable original event logs | `data/raw/` |
+| `.parquet` | Standardized and pattern-modified event logs | `data/processed/` |
+| `.json` | Provenance, injection manifests, rendering metadata, and annotations | Alongside corresponding artifacts |
+| `.png` | Rendered Dotted Charts and cropped views | `data/generated/charts/` |
+| `.jsonl` | Model-specific multimodal training and evaluation records | Versioned dataset exports |
+
+Use **Parquet as the preferred internal tabular exchange format** between event-log processing, pattern injection, and rendering. Preserve original XES/CSV files unchanged. Store metadata separately in JSON, referenced by stable artifact IDs. Preserve timestamp semantics, stable event IDs, and non-tabular attributes through an explicit schema/conversion policy; do not assume that converting XES to Parquet preserves all process-mining semantics automatically. A JSONL sample may reference an image file rather than embed its bytes, according to the selected training pipeline.
 
 ---
 
 ## 3. Phase-by-Phase Implementation Guide
 
-### Phase 1 — Event Log Processing & Pattern Injection Engine
+### Phase 1 — Event Log Collection & Processing
 
-**Goal:** Take a baseline event log and inject distinct, controllable patterns.
+**Goal:** Build a reproducible pipeline for loading, standardizing, validating, and storing event logs.
 
-#### 1. Base Event Logs
+**Proposed approach:**
 
-- Use synthetic logs generated by suitable process-simulation tools or filtered real logs (e.g., BPI Challenge 2012/2017).
-- Load logs as PM4Py EventLogs or pandas DataFrames with `case:concept:name`, `concept:name`, and `time:timestamp`.
-- **Proposed:** Reserve independent base logs/generation seeds for evaluation; do not split near-duplicate chart variants randomly between training and test.
+1. Begin with a limited selection of public real-world XES/CSV event logs, such as BPI Challenge datasets.
+2. Use PM4Py and Pandas to load and standardize event attributes.
+3. Require the following core attributes:
 
-#### 2. Pattern Catalog
+   - `case:concept:name` — Case identifier
+   - `concept:name` — Activity
+   - `time:timestamp` — Event timestamp
 
-**A. Temporal Gap (e.g., outage or non-working period)**
+4. Preserve additional attributes such as resources and lifecycle information when available.
+5. Validate missing values, timestamp interpretation, case identities, and data integrity.
+6. Preserve original logs and store standardized outputs in **Parquet (`.parquet`)**, with source provenance and preparation metadata in JSON.
 
-- **Method:** Shift events occurring after `T_start` forward by `delta_t` (e.g., three days), preserving event order within each affected case.
-- **Candidate ground truth:** Time interval `[T_start, T_start + delta_t]` across the relevant displayed vertical range.
-- **Interpretation caveat:** An empty interval does not prove a system outage.
+**Reproducibility requirements:**
 
-**B. Batching (synchronized activity execution)**
+- Source identifiers and checksums
+- Timestamp and timezone interpretation
+- Processing configuration
+- Stable event identities
+- Source/process provenance groups
+- Relevant library versions
 
-- **Method:** Select `N` cases whose activity `A` occurs within a window; arrange these activity timestamps near a common time (e.g., 14:00).
-- **Candidate ground truth:** `xmin = batch_time - margin`, `xmax = batch_time + margin`; vertical range of affected cases.
-- **Integrity check:** Ensure changed timestamps do not reorder preceding/following events incorrectly; adjust or reject invalid cases.
+**Deliverable:** A validated event-log representation with reproducible preparation metadata.
 
-**C. Case Delays / Outliers**
+A dedicated implementation plan defines the concrete modules, CLI, and tests for this phase.
 
-- **Method:** Select a small fraction of cases (initial proposal: 1–2%) and introduce a long delay (e.g., +20 days) between successive activities; shift later events consistently when required.
-- **Candidate ground truth:** A region capturing the visible evidence of the delay. **To decide:** A box around the delayed dot alone may be insufficient; the interval or affected case may be the more meaningful target.
+### Phase 2 — Controlled Pattern Injection
 
-**D. Workload Spikes / Clusters**
+**Goal:** Generate event-log variants containing controlled visual patterns with traceable intervention metadata.
 
-- **Method:** Add an unusually high number of case arrivals in a short time window while preserving plausible full traces.
-- **Candidate ground truth:** Time/vertical region where increased density is visible; **to define precisely**.
+#### Initial Pattern Catalog
 
-#### 3. Critical Rule — Event Sequence Integrity
+| Pattern | Candidate injection strategy | Expected visual evidence |
+| --- | --- | --- |
+| **Temporal Gap** | Shift or suspend events within a selected time interval | Empty or unusually sparse vertical time region |
+| **Batching** | Synchronize selected activity timestamps across multiple cases | Narrow vertical alignment or cluster of events |
+| **Case Delay / Outlier** | Introduce unusually long waiting times in selected cases | Isolated late events or extended case timelines |
+| **Workload Spike** | Increase arrivals or event frequency within a time window | Localized increase in point density |
 
-- Preserve chronological order of events within each case. When delaying an event, adjust subsequent events in that case when needed.
-- Validate each case before rendering, e.g. `timestamp[n] >= timestamp[n - 1]` after deterministic ordering.
-- Keep injection metadata separately from the VLM's visual input so that the model cannot simply read the answer from the prompt.
+#### Injection Requirements
 
-### Phase 2 — Chart Rendering & Coordinate Mapping
+- Record pattern type, injection ID, affected events/cases, time interval, parameters, and random seed.
+- Preserve process dependencies where feasible; document intentional violations.
+- Support multiple instances of the same pattern and combinations of different patterns.
+- Preserve original logs and store modified event-log variants as **Parquet**, with their injection manifests in **JSON**.
+- Distinguish injected changes from naturally occurring visual structures.
 
-**Goal:** Render each modified log as a Dotted Chart PNG and align ground-truth annotations with the final pixels and the Qwen image processor.
+**Important:** The visual manifestation of a pattern depends on the chart's time range, sorting, density, and rendering configuration.
 
-#### 1. Initial Rendering Specification (Proposed Baseline)
+Injection intervals must therefore not be treated as automatically valid bounding boxes.
 
-- **X-axis:** Absolute time (`time:timestamp`).
-- **Y-axis:** Cases (`case:concept:name`), sorted deterministically by first event/arrival time.
-- **Color:** Activity (`concept:name`).
-- **Initial plotting parameters:** Fixed DPI (e.g., 300), marker size `s = 3`, transparency `alpha = 0.6`.
-- Record plot dimensions, axis limits, sorting convention, legend mapping, rendering parameters, and saved-image dimensions for each sample.
+**Initial implementation priority:** Temporal Gaps and Batching, followed by Delays/Outliers and Workload Spikes.
 
-#### 2. Coordinate Mapping
+**Deliverable:** Modified event logs and structured injection manifests.
 
-Matplotlib figures include plot margins, titles, axis labels, and legends. Derive pixel coordinates with `ax.transData`, not by treating the entire image as the plotting area.
+### Phase 3 — Dotted Chart Rendering & Diversification
 
-1. Convert time to Matplotlib data coordinates:
+**Goal:** Generate visually diverse, reproducible Dotted Charts and preserve the geometry required for annotation.
 
-   ```python
-   x_data = matplotlib.dates.date2num(target_datetime)
-   y_data = case_index_in_sorted_plot
-   ```
+#### Initial Chart Specification
 
-2. Once the final figure layout is resolved, transform data coordinates to display pixels:
+| Property | Proposed baseline |
+| --- | --- |
+| X-axis | Absolute event timestamp |
+| Y-axis | Cases, sorted by first event timestamp |
+| Color | Activity |
+| Output format | PNG |
+| Rendering | PM4Py reference; deterministic Matplotlib implementation if needed |
+| Layout and styling | Explicitly configured and reproducible |
 
-   ```python
-   display_x, display_y = ax.transData.transform((x_data, y_data))
-   ```
+#### Rendering Strategy
 
-3. Convert the bottom-left display origin to the saved image's top-left origin **using the final canvas/image geometry**:
+1. Generate an initial PM4Py Dotted Chart.
+2. Verify whether the final event positions can be reliably mapped to pixels.
+3. Use a custom deterministic renderer if PM4Py geometry is insufficient for automated annotation.
+4. Generate controlled variations of the same modified event log.
+5. Record all view settings and transformations.
 
-   ```python
-   image_x = display_x
-   image_y = final_image_height - display_y
-   ```
+**Candidate visual variations:**
 
-4. Map both corners of the proposed region, reorder minima/maxima if necessary, and clip boxes to the chart/image bounds. Store original-image coordinates as:
+- Chart aspect ratio and image dimensions
+- Time windows and axis limits
+- Number and ordering of displayed cases
+- Marker size and transparency
+- Color palette and legend configuration
+- Event density
+- Full-chart and cropped views
 
-   ```python
-   bbox_xyxy = [xmin_px, ymin_px, xmax_px, ymax_px]
-   ```
+For Matplotlib, initial experimental settings may include DPI around `300`, marker size `s ≈ 3`, and transparency `alpha ≈ 0.6`. These values are illustrative and should be validated against chart readability.
 
-5. Apply **the same image resizing/processing transformation** used for model input to map boxes into the coordinates expected by Qwen2.5-VL. Unlike Qwen2-VL, Qwen2.5-VL's native grounding uses absolute coordinates on the processed image rather than an intrinsic `[0, 1000]` scale.
+**Coordinate requirement:** Event-to-pixel mappings must correspond to the final exported image, including margins, axis labels, cropping, and resizing.
 
-**Verification:** Draw boxes on the final PNG, inspect several edge cases manually, and test coordinates after resizing or cropping. `savefig(..., bbox_inches="tight")` and later transformations can change the mapping.
+**Deliverable:** PNG images, rendering configurations, and coordinate-mapping metadata.
 
-### Phase 3 — Instruction Dataset Formatter (JSONL)
+### Phase 4 — Ground-Truth Annotation & Quality Control
 
-**Goal:** Package chart images, prompts, and verified annotations into a suitable conversational instruction dataset.
+**Goal:** Generate accurate, instance-level annotations for visible patterns in each chart.
 
-#### 1. Prompt Design
+#### Annotation Model
 
-- Do **not** include raw event-log dumps in a visual-only task; they are large and may allow the model to bypass image interpretation.
-- Include only information that is intentionally available at inference time (e.g., chart axis definitions and legend if necessary).
-- Use the same task/output convention consistently for training and evaluation.
+Every chart may contain **zero, one, or multiple pattern instances**.
 
-#### 2. Output Format
+Each instance should contain:
 
-- **Initial recommendation:** Produce concise, structured JSON with pattern label, bounding box, and observable visual evidence.
-- **Proposed extension:** Compare this with explicit visual reasoning traces in a separate experiment. Do **not** require fabricated `<think>` text in every training example by default.
-- Separate visual evidence from speculative operational causes.
+- Unique pattern-instance ID
+- Pattern class
+- Visibility status
+- Bounding box when spatially localizable
+- Short visual-evidence description
+- Reference to its source injection, when applicable
 
-#### 3. Example Conceptual Training Record
+**Visibility states:**
 
-This is a **human-readable conceptual record**; adapt image loading and message formatting to the exact TRL collator/processor interface used.
+| Status | Meaning |
+| --- | --- |
+| `visible` | Pattern is sufficiently recognizable and localizable |
+| `partial` | Pattern is visible but clipped or incomplete |
+| `not_visible` | Injection does not produce an observable pattern in the current view |
+| `ambiguous` | Pattern cannot be reliably distinguished or localized |
 
+Only examples satisfying the defined annotation policy should be used for standard supervised localization training.
+
+#### Canonical Bounding-Box Format
+
+Use:
+```text
+bbox_xyxy = [xmin, ymin, xmax, ymax]
+```
+Coordinates are measured in **pixels relative to the final stored chart image**, with the origin in the upper-left corner.
+
+Every annotation must explicitly reference the image dimensions and view configuration.
+
+For cropped views, store the crop's own bounding-box coordinates and retain the transform to its parent image.
+
+#### Model-Specific Coordinate Conversion
+
+Qwen3-VL uses normalized coordinates in `[0, 1000]`.
+
+For an input view with width `W` and height `H`:
+```text
+x_normalized = x_pixel / W * 1000
+y_normalized = y_pixel / H * 1000
+```
+Pure resizing of the same complete view preserves normalized coordinates. Cropping, padding, or changes in framing require explicit remapping.
+
+The reverse transformation must be applied during inference to visualize predictions on the original chart.
+
+#### Annotation Quality Control
+
+Validate:
+
+1. Bounding-box geometry and image boundaries.
+2. Correct association between pattern labels and visible regions.
+3. Visibility and sufficient visual contrast.
+4. Consistency after rendering, cropping, and resizing.
+5. Multiple or overlapping pattern instances.
+6. Ambiguous cases and potentially mislabeled negative examples.
+
+Injection metadata should generate **candidate annotations**, followed by automatic checks and representative manual inspection.
+
+Unmodified event logs must not automatically be considered pattern-free.
+
+**Deliverable:** Versioned annotation manifests with validated pattern instances and quality-control results.
+
+### Phase 5 — VLM Instruction Dataset Generation
+
+**Goal:** Convert verified chart annotations into supervised multimodal training examples.
+
+Each training sample contains:
+```text
+Dotted Chart Image
+       +
+Instruction
+       +
+Pattern Labels
+       +
+Bounding Boxes
+       +
+Visual Explanations
+```
+#### Prompt Design
+
+Prompts should:
+
+- Describe the visual pattern detection and localization task.
+- Define the supported pattern classes.
+- Specify the required structured output format.
+- Use only information available at inference time.
+- Avoid exposing injection metadata or ground-truth labels.
+
+Training and evaluation must use compatible prompting conventions.
+
+#### Output Representation
+
+Use concise structured JSON with zero or more detected patterns.
+
+**Conceptual example — Qwen3-VL target:**
 ```json
 {
-  "id": "sample_0001",
-  "image": "path/to/chart_0001.png",
-  "messages": [
+  "patterns": [
     {
-      "role": "user",
-      "content": "Analyze this Process Mining Dotted Chart. Locate visible operational patterns and return their bounding boxes and visual evidence."
+      "label": "temporal_gap",
+      "bbox_2d": [310, 120, 410, 870],
+      "explanation": "An interval without visible events across the displayed cases."
     },
     {
-      "role": "assistant",
-      "content": "{\"patterns\":[{\"bbox_xyxy\":[300,150,520,950],\"label\":\"temporal_gap\",\"explanation\":\"No events are visible in this interval across the displayed cases.\"}]}"
+      "label": "batching",
+      "bbox_2d": [620, 250, 660, 740],
+      "explanation": "Multiple events are aligned within a narrow time window."
     }
   ]
 }
 ```
+Bounding boxes are normalized relative to the specific input view. Values are illustrative.
 
-The example coordinates are illustrative and must be computed and validated from the actual processed image. Keep the model-independent ground truth and processor-specific training representation distinct.
-
-### Phase 4 — VLM Fine-Tuning Pipeline (QLoRA)
-
-**Goal:** Prototype with `Qwen/Qwen2.5-VL-3B-Instruct`, then evaluate a 7B variant if GPU resources permit.
-
-#### 1. Training Stack
-
-- Hugging Face `transformers`, `peft`, `bitsandbytes`, `trl` (`SFTTrainer`), `accelerate`.
-- **Initial model:** `Qwen/Qwen2.5-VL-3B-Instruct`.
-- **Candidate final model:** `Qwen/Qwen2.5-VL-7B-Instruct`.
-- **Quantization:** 4-bit NF4 via `BitsAndBytesConfig`.
-- **Data processing:** Use Qwen's image processor and preserve image tokens; TRL's VLM SFT documentation advises checking truncation (e.g., start with `max_length=None`). See [TRL SFTTrainer documentation](https://huggingface.co/docs/trl/sft_trainer).
-
-#### 2. LoRA Target Modules (Proposed / To Validate)
-
-Candidate target modules:
-
-```python
-target_modules = [
-    "q_proj", "v_proj", "k_proj", "o_proj",
-    "gate_proj", "up_proj", "down_proj",
-]
+**Verified negative example:**
+```json
+{
+  "patterns": []
+}
 ```
+The canonical dataset retains instance IDs, pixel-space annotations, visibility flags, and provenance; these need not all appear in model-generated text.
 
-Initial LoRA parameters: `r = 16`, `lora_alpha = 32`, `lora_dropout = 0.05`.
+#### Dataset Construction
 
-**Important:** Listing these module names does **not** guarantee that adapters are attached to the vision encoder or multimodal projector. Inspect the actual Qwen2.5-VL module hierarchy and verify trainable parameters. Whether to train language modules, vision modules, and/or projector layers is an experimental decision.
+- Use the multimodal chat structure supported by the chosen Transformers/TRL version.
+- Keep images and structured labels correctly aligned.
+- Preserve image tokens during preprocessing and batching.
+- Exclude invisible or insufficiently reliable annotations according to the dataset policy.
+- Track class distributions, pattern combinations, and verified negatives.
 
-#### 3. Initial Hyperparameters (Proposed / To Validate)
+**Research extension:** Compare concise visual explanations with more detailed reasoning-oriented responses as a controlled experiment.
+
+Do not require synthetic reasoning traces without reliable supporting evidence.
+
+**Deliverable:** Validated multimodal training and evaluation datasets.
+
+### Phase 6 — Qwen3-VL Fine-Tuning (QLoRA)
+
+**Goal:** Adapt Qwen3-VL for Dotted-Chart pattern detection and localization.
+
+#### Baseline Before Training
+
+Evaluate the pretrained Qwen3-VL-8B-Instruct model **zero-shot** on a fixed, verified evaluation subset before beginning fine-tuning.
+
+Record:
+
+- Detection quality
+- Localization accuracy
+- Structured-output validity
+- Explanation quality
+- Image resolution and inference settings
+- Runtime and memory consumption
+
+This provides the baseline for measuring fine-tuning improvements.
+
+#### Training Stack
+
+**Proposed initial stack:**
+
+- `transformers`
+- `peft`
+- `trl` with `SFTTrainer`
+- `accelerate`
+- `bitsandbytes`
+- PyTorch
+
+Start with `Qwen/Qwen3-VL-8B-Instruct`.
+
+Evaluate `Qwen/Qwen3-VL-32B-Instruct` only when hardware feasibility has been established.
+
+Frameworks such as Unsloth or LLaMA-Factory remain optional alternatives, subject to verified compatibility.
+
+#### Initial Hyperparameters
 
 | Parameter | Candidate setting |
 | --- | --- |
+| Fine-tuning | QLoRA |
+| Quantization | 4-bit NF4 |
+| LoRA rank | `16` |
+| LoRA alpha | `32` |
+| LoRA dropout | `0.05` |
 | Learning rate | `1e-4` to `2e-4` |
 | Scheduler | Cosine with warmup |
-| Per-device batch size | `2` or `4`, **only if memory permits** |
-| Gradient accumulation | `4` |
-| Epochs | `3`–`5` |
-| Precision | `bf16` on compatible GPUs; otherwise evaluate alternatives |
+| Per-device batch size | Start with `1` |
+| Gradient accumulation | Initially `4` |
+| Epochs | `3–5`, subject to validation |
+| Precision | `bf16` when supported |
+| Image resolution | Configurable; determined experimentally |
 
-Begin with a very small **training smoke test** and record GPU memory, loss, runtime, and processor behavior before selecting final values.
+These are **initial candidates, not validated optimal values**.
 
-### Phase 5 — Inference, Parsing & Visual Overlay
+#### Trainable Modules
 
-**Goal:** Detect patterns in unseen charts, parse structured predictions, and visualize them as overlays.
+Investigate which modules should receive LoRA adapters:
 
-1. Request a stable JSON schema; parse the JSON response directly when possible, with robust handling of unexpected formatting.
-2. Read `bbox_xyxy = [xmin, ymin, xmax, ymax]` and validate coordinate order, numeric types, and bounds.
-3. **If prediction coordinates refer to a resized/processed image**, map them back to the original image dimensions using the recorded preprocessing transform (including resizing/cropping). Do **not** apply a hard-coded `/1000` formula to Qwen2.5-VL outputs.
-4. Use OpenCV or PIL (`ImageDraw`) for semi-transparent box overlays and labels.
+- Language-model attention and projection layers
+- Vision encoder
+- Multimodal projector
 
-**Proposed visualization colors:**
+Begin with a verified minimal adapter configuration.
+
+Trainable vision components should be investigated through controlled experiments rather than assumed necessary.
+
+#### Training Validation
+
+Before full-scale training:
+
+1. Verify model loading and quantization.
+2. Run a small multimodal forward/backward training test.
+3. Verify trainable parameters and gradient flow.
+4. Inspect effective image resolution and visual-token processing.
+5. Verify structured target formatting and loss computation.
+6. Measure peak VRAM and runtime.
+7. Test adapter saving and reloading.
+
+**MLflow integration:** Use native Trainer logging where supported and the MLflow API for additional evaluation metrics and artifacts. Training must remain functional when tracking is disabled.
+
+**Deliverable:** Fine-tuned LoRA adapters, training configuration, logs, and reproducible experiment records.
+
+### Phase 7 — Inference, Parsing & Visual Overlay
+
+**Goal:** Detect and visualize patterns in previously unseen Dotted Charts.
+
+#### Inference Workflow
+
+1. Load the selected Qwen3-VL checkpoint and corresponding LoRA adapter.
+2. Apply the recorded image preprocessing and prompt configuration.
+3. Generate a structured response containing zero or more pattern instances.
+4. Validate the response schema, class labels, and bounding-box values.
+5. Convert normalized Qwen3-VL coordinates from the model input view back to the original chart's pixel coordinates, accounting for recorded crop, padding, and resizing transformations.
+6. Display predicted bounding boxes and explanations on the chart.
+
+Invalid or malformed predictions must be handled explicitly rather than silently treated as correct detections.
+
+#### Optional Overlay Colors
 
 | Pattern | Color |
 | --- | --- |
-| Outliers / case delays | Red |
-| Temporal gaps | Orange |
+| Temporal Gap | Orange |
 | Batching | Blue |
-| Workload spikes | Purple |
+| Case Delay / Outlier | Red |
+| Workload Spike | Purple |
 
-### Phase 6 — Evaluation & Benchmarking
+Visualization colors are presentation conventions and are not part of the semantic ground-truth definition.
 
-**Goal:** Quantify pattern detection, localization, and explanation quality on synthetic and unseen real-world data.
+**Deliverable:** Structured predictions and annotated image overlays.
 
-#### 1. Spatial Localization
+### Phase 8 — Evaluation & Benchmarking
 
-Intersection over Union:
+**Goal:** Evaluate detection, localization, explanation quality, and generalization.
 
-\[
-\mathrm{IoU} = \frac{\operatorname{Area}(\mathrm{Prediction} \cap \mathrm{GroundTruth})}{\operatorname{Area}(\mathrm{Prediction} \cup \mathrm{GroundTruth})}
-\]
+#### Detection Metrics
 
-- **Proposed initial threshold:** IoU ≥ 0.5 for a matched detection.
-- **To validate:** Thin batches, empty gaps, and delays may require pattern-specific localization criteria or temporal/point-distance tolerances in addition to rectangular IoU.
+Use instance-level matching with an explicitly documented evaluation protocol.
 
-#### 2. Classification
+Report:
 
-- Precision, recall, and F1 per pattern class (temporal gap, batching, delay/outlier, workload spike).
-- Include negative examples and report false positives on charts without injected patterns.
+- Precision
+- Recall
+- F1-score
+- Per-pattern metrics
+- False positives on verified negative charts
+- Invalid-output rate
 
-#### 3. Generalization and Text Evaluation
+Detection should also be evaluated separately from localization where useful, so that correct classification with inaccurate coordinates can be diagnosed.
 
-- Hold out independent base logs, injection scenarios, and preferably chart renderings.
-- Evaluate on real logs with a separately reviewed annotation protocol; naturally occurring patterns may have uncertain labels.
-- Assess short explanations for **correct visual evidence**, not unsupported causal claims.
+#### Spatial Localization
 
-#### 4. Baselines
+Use **Intersection over Union (IoU)** between predicted and ground-truth bounding boxes:
+```text
+IoU = Intersection Area / Union Area
+```
+Proposed initial threshold:
+```text
+IoU >= 0.5
+```
+For detection-and-localization evaluation, apply consistent **one-to-one matching** between predicted and ground-truth instances, including class-label agreement.
 
-1. Zero-shot base Qwen2.5-VL (same model size where possible).
-2. Fine-tuned Qwen2.5-VL.
-3. **Optional:** External multimodal API models as additional zero-shot baselines; select currently available models, budgets, and data-sharing constraints before finalizing the benchmark.
+Narrow temporal gaps, thin batches, and elongated case delays may require additional pattern-specific spatial criteria.
+
+The IoU threshold and matching policy should be finalized before testing.
+
+#### Explanation Quality
+
+Evaluate whether generated descriptions:
+
+- Correctly identify visible evidence.
+- Refer to the localized pattern.
+- Avoid unsupported causal claims.
+- Remain consistent with the detected pattern class.
+
+Explanation assessment may initially require structured manual review.
+
+#### Generalization
+
+Prevent data leakage by grouping train/validation/test splits at the **highest shared provenance level** available.
+
+Related source logs, monthly extracts, injected variants, cropped views, and re-renderings must not cross split boundaries when they share the same underlying data.
+
+Evaluate on:
+
+1. Held-out synthetic patterns from independent source groups.
+2. Different pattern intensities and rendering configurations.
+3. Independent real-world event logs.
+4. Separately reviewed naturally occurring patterns, where reliable labels are available.
+
+If an independent test process is unavailable, report this as a limitation rather than claiming cross-process generalization.
+
+#### Baselines and Ablation Studies
+
+**Primary baseline:**
+
+- Zero-shot Qwen3-VL-8B versus fine-tuned Qwen3-VL-8B.
+
+**Optional model comparison:**
+
+- Qwen3-VL-8B versus Qwen3-VL-32B, subject to hardware feasibility.
+
+**Candidate ablations:**
+
+- Uniform rendering versus visual diversification.
+- Full charts versus cropped or multi-view training samples.
+- Single-source versus multi-source training datasets.
+- Different pattern intensities and combinations.
+- Frozen versus selectively adapted vision modules.
+
+Use consistent evaluation data, annotation rules, and metrics for fair comparisons.
+
+**Deliverable:** Quantitative results, visual examples, error analysis, and documented experimental limitations.
+
+---
+
+## 4. Experiment Tracking & Reproducibility
+
+Use **MLflow** for meaningful VLM training and evaluation experiments.
+
+### Experiment Organization
+
+- One MLflow run per distinct training configuration.
+- Meaningful run names and experiment identifiers.
+- Configurable tracking URI and experiment name.
+- Local tracking during development and shared tracking-server support when available.
+- Record the associated Git commit and dataset/annotation versions.
+- Link separately executed evaluations to the originating training run or model artifact.
+
+### Parameters and Metrics
+
+**Model and training:**
+
+- Model/checkpoint identifier and revision
+- Image processor version and effective resolution
+- LoRA configuration and trainable modules
+- Quantization and numerical precision
+- Learning rate, batch size, gradient accumulation, epochs, and seeds
+- GPU model, memory usage, and runtime
+
+**Dataset:**
+
+- Source-log provenance and dataset versions
+- Pattern-injection configuration and class distribution
+- Rendering configurations and view strategy
+- Annotation and visibility policies
+- Train/validation/test grouping
+
+**Training metrics:**
+
+- Training and validation loss
+- Learning rate
+- Runtime and relevant memory statistics
+
+**Evaluation metrics:**
+
+- Detection Precision/Recall/F1
+- Bounding-box IoU
+- Per-pattern results and false-positive rates
+- Matching criteria and evaluation thresholds
+- Available explanation-quality measurements
+
+### Tracking Integration
+
+Prefer Hugging Face Trainer integration:
+```python
+report_to="mlflow"
+```
+Use the MLflow Tracking API for project-specific metrics, dataset metadata, and evaluation artifacts.
+
+Avoid duplicate logging of metrics already handled by the Trainer.
+
+### Artifacts and Safeguards
+
+Store:
+
+- Effective experiment configurations
+- Evaluation summaries
+- Representative prediction and ground-truth overlays
+- References to saved LoRA adapters and checkpoints
+
+Do not automatically upload complete base-model weights or large datasets.
+
+Tracking must be optional. Failures should be reported clearly, with experiment results preserved locally where possible.
+
+Keep local MLflow databases, credentials, and large artifacts outside Git.
+
+**Reproducibility requires more than MLflow:** source data, preprocessing, rendering, annotation, training configuration, and evaluation definitions must all remain traceable.
 
 ---
 
 ## 5. Critical Pitfalls to Avoid
 
-1. **Coordinate offset and resizing errors:** Account for axes, labels, padding, saved-image dimensions, and Qwen processor scaling. Validate overlays after all transformations.
-2. **Inconsistent case sorting:** Use a deterministic baseline sorting convention and record it. Different views can be studied later as explicit variables.
-3. **Broken event-order semantics:** Enforce within-case timestamp ordering after every injection; batching can also violate this constraint.
-4. **Prompt leakage and context overload:** Do not reveal injection metadata or full raw logs to the visual-only model; use only intended inference-time metadata.
-5. **Dense, unreadable plots:** Test marker size (`s = 2`–`4`) and alpha (`0.4`–`0.6`) across density conditions; a fixed parameter does not solve every scale.
-6. **Synthetic-to-real domain gap and split leakage:** Group related chart variants into the same split; test on independent logs and non-injected real charts.
-7. **Ground-truth ambiguity:** A precisely injected change is not necessarily a uniquely visible region or a confirmed operational root cause.
+| Risk | Required safeguard |
+| --- | --- |
+| **Incorrect bounding boxes** | Track final-image geometry and all coordinate transformations; validate overlays |
+| **Invisible or ambiguous patterns** | Use explicit visibility policies and reject unreliable training targets |
+| **Data leakage** | Group splits by shared provenance, not individual chart files |
+| **False negative labels** | Do not assume unmodified event logs contain no natural patterns |
+| **Uncontrolled rendering** | Make random seeds, case sorting, palettes, and view settings reproducible |
+| **Misleading process semantics** | Document intentional violations and avoid unsupported causal interpretations |
+| **Unreliable fine-tuning configuration** | Verify real GPU memory, trainable modules, and multimodal preprocessing |
+| **Insufficient visual resolution** | Inspect patterns after the actual model image preprocessing |
+| **Prompt leakage** | Exclude injection and ground-truth metadata from image-only inputs |
+| **Synthetic-to-real domain gap** | Evaluate on independent real-world logs and report limitations |
+| **Incomparable experiments** | Keep datasets, thresholds, annotations, and evaluation logic consistent |
+| **Incomplete experiment records** | Track configurations, artifacts, and results with MLflow and provenance metadata |
 
 ---
 
 ## 6. Essential Literature & References
 
-1. **Dotted Charts:** Song, M., & van der Aalst, W. M. P. (2007). *Supporting Process Mining by Showing Events at a Glance.* Building Integration Capabilities in Information Systems.
-2. **Qwen2.5-VL:** Bai et al. (2025). *Qwen2.5-VL Technical Report.* [arXiv:2502.13923](https://arxiv.org/abs/2502.13923); [Qwen2.5-VL repository](https://github.com/QwenLM/Qwen2.5-VL).
-3. **Chart understanding:** Masry et al. (2025). *ChartQAPro: A Benchmark for Complex Visual Reasoning on Charts.*
-4. **Chart instruction tuning:** Masry et al. (2024). *ChartInstruct: Instruction Tuning for Visual Chart Understanding.*
-5. **PM4Py:** [Process Mining for Python](https://processintelligence.solutions/pm4py).
-6. **Cortado:** [Interactive Process Mining](https://github.com/cortado-tool/cortado).
-7. **Training reference:** [Hugging Face TRL — SFTTrainer](https://huggingface.co/docs/trl/sft_trainer).
+1. **Dotted Charts:** Song, M., & van der Aalst, W. M. P. (2007). **Supporting Process Mining by Showing Events at a Glance**.
+2. **Model-based ground truth:** Sommers et al. (2025). **A Ground Truth Approach for Assessing Process Mining Techniques**. [Publication](https://link.springer.com/article/10.1007/s44311-025-00006-8).
+3. **Synthetic chart training data:** Yang et al. (2025). **Effective Training Data Synthesis for Improving MLLM Chart Understanding**. [ICCV paper](https://openaccess.thecvf.com/content/ICCV2025/html/Yang_Effective_Training_Data_Synthesis_for_Improving_MLLM_Chart_Understanding_ICCV_2025_paper.html).
+4. **Qwen3-VL:** [Official repository](https://github.com/QwenLM/Qwen3-VL) · [8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) · [32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct).
+5. **Chart instruction tuning:** Masry et al. (2024). **ChartInstruct: Instruction Tuning for Chart Comprehension and Reasoning**. [ACL](https://aclanthology.org/2024.findings-acl.619/).
+6. **PM4Py:** [Process Mining for Python](https://processintelligence.solutions/pm4py).
+7. **VLM fine-tuning:** [Hugging Face TRL — SFTTrainer](https://huggingface.co/docs/trl/sft_trainer).
+8. **Experiment tracking:** [MLflow Tracking](https://mlflow.org/docs/latest/ml/tracking/).
 
 ---

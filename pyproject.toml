@@ -1,3 +1,4 @@
+
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
@@ -19,11 +20,20 @@ dependencies = [
     "peft",
     "trl",
     "bitsandbytes",
-    "qwen-vl-utils",
+    "qwen-vl-utils>=0.0.14",
 
-    # Data Processing
+    # Event Log Processing
+    "pm4py",
+    "pandas",
+    "pyarrow",
+
+    # Data Processing and Visualization
     "datasets",
     "pillow",
+    "matplotlib",
+
+    # Experiment Tracking
+    "mlflow",
 ]
 
 [dependency-groups]
