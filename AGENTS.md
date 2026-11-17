@@ -25,19 +25,33 @@ The target is **visual pattern recognition**, not proof of an operational root c
 Prefer existing modules and APIs. The paths below describe responsibilities, and some components are still planned. **Do not create placeholder directories or move working code solely to match this list.**
 
 | Location | Responsibility |
+
 | --- | --- |
+
 | `src/data/` | Event-log loading, preprocessing, validation, controlled pattern injection, and provenance |
+
 | `src/data/event_logs/` (planned) | Config, loader, preprocessing, validation, and Parquet storage for XES/CSV event logs |
+
 | `src/rendering/` | PM4Py or deterministic custom Dotted Chart rendering, visualization variants, coordinate mapping, and annotation checks |
+
 | `src/training/` | Model-agnostic VLM dataset formatting, Qwen3.5-9B inference, QLoRA training, model-specific processors, and output parsing |
+
 | `src/evaluation/` | Dataset splits, baselines, matching and localization metrics, and result analysis |
+
 | `scripts/` (when needed) | Thin command-line entry points calling reusable code in `src/` |
+
 | `tests/` | Fast, deterministic unit and integration tests, including small tracked fixtures and expected annotations |
-| `docs/` | Blueprint, implementation plans, technical documentation, and `docs/change_logs/` |
+
+| `docs/` | Blueprint, implementation plans, feature/usage guides, technical documentation, and `docs/change_logs/` |
+
 | `data/raw/` | Unmodified source event logs (XES/CSV); separate from the Python `src/data/` code |
+
 | `data/processed/` | Standardized and injected event logs in Parquet format (`.parquet`), plus provenance and injection metadata (`.json`) |
+
 | `data/generated/charts/` | Generated Dotted Chart images (`.png`) and rendering metadata (`.json`) |
+
 | `data/generated/annotations/` | Ground-truth labels and bounding boxes (`.json`); model-specific training manifests (`.jsonl` where applicable) |
+
 | `outputs/`, `models/`, `checkpoints/` (when needed) | Local experiments, models, and training artifacts excluded from Git |
 
 - Make the smallest coherent change; preserve established public APIs and directory conventions unless the task requires otherwise.
@@ -46,7 +60,7 @@ Prefer existing modules and APIs. The paths below describe responsibilities, and
 
 - Keep event-log processing, pattern injection, rendering, annotations, training, and evaluation independently testable.
 
-- When implementing a task with a documented step-by-step plan, **follow its stages in order**. After each **completed logical implementation stage**, add and run focused tests under `tests/`, fix failures, and only then advance. Do not declare a stage complete without satisfying its acceptance criteria; documentation-only edits do not require new code tests.
+- When implementing a task with a documented step-by-step plan, **follow its stages in order**. After each **completed logical implementation stage**, add and run focused tests under `tests/`, fix failures, and update the corresponding usage documentation in `docs/` before advancing. Do not declare a stage complete without satisfying its acceptance criteria; documentation-only edits do not require new code tests.
 
 ## Python conventions
 
@@ -191,12 +205,34 @@ Reference documentation (verify current revisions before implementation): [Qwen3
 - Prefer non-mutating verification when reviewing changes, if tools are installed:
 
 ```bash
+
 ruff format --check .
+
 ruff check .
+
 python -m pytest
+
 ```
 
 - Inspect the actual `makefile`/`Makefile` before invoking targets: some targets apply fixes or formatting and modify files. Review `git diff` afterward. Never claim a check passed unless it actually ran successfully.
+
+## Feature documentation (required after implementation)
+
+- **After every completed logical implementation stage or user-facing feature, create or update a practical Markdown guide in `docs/`** explaining the implemented behavior. This is part of the definition of done, alongside tests. Update an existing relevant guide rather than creating duplicate documents; do not create one document per helper function or minor internal refactor.
+
+- Write for developers and researchers who need to **understand and use** the feature, not just review its code. Explain concisely:
+  1. **Purpose and pipeline context:** what problem the feature solves, why it exists, and where it fits into the overall workflow.
+  2. **Workflow and data flow:** the main processing steps, required inputs, produced outputs, formats, and important invariants or data contracts.
+  3. **How to use it:** copyable, verified CLI examples and/or short Python API examples using the real implemented interfaces and representative paths.
+  4. **Available options:** meaningful flags, parameters, defaults, supported formats, configuration choices, and how they affect behavior.
+  5. **Validation and limitations:** relevant error cases, assumptions, unsupported functionality, and any important reproducibility or safety requirements.
+  6. **Integration:** how subsequent pipeline stages consume the outputs, when relevant.
+
+- Keep explanations **clear, concise, and proportional to the feature**. Focus on purpose, usage, and available capabilities; avoid line-by-line code walkthroughs, speculative options, duplicated README text, or exhaustive implementation internals unless they are necessary to use the feature correctly.
+
+- **Document only functionality verified in the actual implementation.** Distinguish supported features from planned ones, and keep commands, filenames, flags, and output examples consistent with the current code. If a stage adds functionality to an existing workflow, update its guide in the same change.
+
+- Keep `README.md` as the concise project entry point with links to the relevant `docs/` guides. A **feature guide explains how and why to use the code**; a `docs/change_logs/` entry separately records **what was changed, why, and which checks ran**. Both are required for meaningful implementation changes; neither replaces the other.
 
 ## Documentation, Git, and execution safeguards
 
@@ -204,15 +240,13 @@ python -m pytest
 
 - A logical change may touch several files: write **one log per cohesive change**, not one per file. For independent changes, use separate entries. Read-only analysis does not require an entry, and creating the entry does not itself trigger another entry.
 
-- Name entries `YYYY-MM-DDTHH-MM-SSZ_<short-kebab-case-summary>.md` with the **UTC completion timestamp**. Do not overwrite an existing entry; append a unique suffix if needed.
+- Name entries `YYYY-MM-DDTHH-MM-SSZ_\<short-kebab-case-summary>.md` with the **UTC completion timestamp**. Do not overwrite an existing entry; append a unique suffix if needed.
 
 - Each entry must briefly document **what changed, why, affected files/modules, checks and results** (including checks not run), and **known limitations/follow-ups**. Preserve old entries as an audit trail; never fabricate test results.
 
-- Update the relevant README, implementation plan, or technical documentation when data contracts, CLIs, public APIs, or experimentally important assumptions change. Distinguish planned features from implemented ones.
+- Keep the relevant README, feature guide, implementation plan, and technical documentation consistent when data contracts, CLIs, public APIs, or experimentally important assumptions change. Distinguish planned features from implemented ones.
 
-- **GitHub Issues** are currently the source of truth for task assignments, status, technical discussion, and detailed findings. Reference relevant Issues and PRs where available; if the repository is moved to GitLab, use its Issues and Merge Requests instead. The **Project Log** (in the team wiki or its designated location) is maintained at team meetings for research conclusions and decisions, **not** for per-commit activity or agent change logs.
-
-- Follow existing GitHub Issue, branch, pull-request, and Conventional Commit conventions. Do not commit, push, switch branches, or rewrite Git history unless explicitly requested.
+- Do not commit, push, switch branches, or rewrite Git history unless explicitly requested.
 
 - Do not commit raw or derived research datasets, bulk generated charts/annotations, model weights, checkpoints, large outputs, or credentials. **Small, non-sensitive test fixtures and expected annotation examples in `tests/` are explicitly allowed.** Respect `.gitignore` and preserve tracked `.gitkeep` placeholders.
 
