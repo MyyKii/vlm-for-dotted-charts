@@ -157,6 +157,63 @@ Install runtime dependencies with `pip install -e .` and development tools with 
 
 Dependencies are currently not fully pinned. Once the training stack works on the target GPUs, record compatible versions in a lockfile to improve reproducibility.
 
+## Preparing Event Logs
+
+Phase 1 supports manually downloaded, local `.xes` and `.csv` sources. After the
+editable installation above, prepare a log from the repository root:
+
+```bash
+python scripts/prepare_event_log.py \
+    --input data/raw/receipt.xes \
+    --output data/processed/receipt.parquet
+```
+
+For CSV files, map the source columns and specify the timezone of naive dates:
+
+```bash
+python scripts/prepare_event_log.py \
+    --input data/raw/receipt.csv \
+    --output data/processed/receipt.parquet \
+    --case-id-column case_id \
+    --activity-column activity \
+    --timestamp-column timestamp \
+    --source-timezone Europe/Berlin
+```
+
+Use `--csv-separator ';'` for semicolon-separated input and `--timestamp-format`
+for non-ISO dates (for example, `'%d.%m.%Y %H:%M'`). Run
+`python scripts/prepare_event_log.py --help` for all options. Failures return a
+nonzero exit status; successful runs report event/case/activity counts, the UTC
+time range, and both output paths.
+
+The pipeline preserves raw files and optional event attributes, normalizes
+timestamps to UTC, and orders events by case, time, and original source position.
+Naive timestamps require an explicit source timezone; invalid dates and ambiguous
+or nonexistent local times fail. Duplicated event combinations are reported and
+retained. Existing outputs require `--overwrite`.
+
+Outputs are **Parquet** and a same-stem **JSON** sidecar containing checksums,
+configuration, counts, schema/storage version, and software versions. Source
+`identity:id` values are preserved; otherwise `source-row:N` IDs are generated.
+Pair event IDs with metadata's `source_sha256` across logs. `@@source_row` retains
+the original zero-based order. Dataset IDs default to the source filename stem;
+use `--dataset-id` and `--split-group-id` to associate related extracts with their
+shared source group. This phase does not assign train/validation/test splits.
+
+Reload a validated DataFrame for pattern injection or rendering:
+
+```python
+from data.event_logs.storage import load_processed_event_log
+
+events = load_processed_event_log("data/processed/receipt.parquet")
+```
+
+Reloading verifies the sidecar, checksum, schema, event counts, and UTC timestamps.
+Scalar optional attributes are supported; conversions that change values or
+dtypes fail before outputs are published. See the
+[event-log implementation and data contracts](docs/implementation_plan_event_logs.md)
+for the reusable module interfaces and current limitations.
+
 ## Development Workflow
 
 ### Formatting, Linting, and Tests

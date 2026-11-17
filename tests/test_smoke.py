@@ -1,4 +1,3 @@
-
 """Basic smoke tests for the project environment."""
 
 import importlib.util
@@ -22,9 +21,7 @@ import pytest
 )
 def test_dependency_available(module):
     """Check that required Python packages are installed."""
-    assert importlib.util.find_spec(module) is not None, (
-        f"Missing dependency: {module}"
-    )
+    assert importlib.util.find_spec(module) is not None, f"Missing dependency: {module}"
 
 
 def test_pytorch_cpu():

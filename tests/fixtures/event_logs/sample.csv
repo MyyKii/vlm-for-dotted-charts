@@ -1,0 +1,5 @@
+case,activity,timestamp,org:resource,identity:id,amount
+002,Archive,2026-01-02T10:30:00+01:00,bob,e-3,5
+001,Submit,2026-01-01T09:00:00Z,alice,e-0,10
+001,Review,2026-01-01T09:00:00Z,alice,e-1,10
+002,Submit,2026-01-02T08:00:00Z,bob,e-2,5

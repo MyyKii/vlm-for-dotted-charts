@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<log xes.version="1.0" xmlns="http://www.xes-standard.org/">
+  <trace>
+    <string key="concept:name" value="002" />
+    <event>
+      <string key="concept:name" value="Archive" />
+      <date key="time:timestamp" value="2026-01-02T10:30:00+01:00" />
+      <string key="org:resource" value="bob" />
+      <string key="identity:id" value="e-3" />
+      <int key="amount" value="5" />
+    </event>
+    <event>
+      <string key="concept:name" value="Submit" />
+      <date key="time:timestamp" value="2026-01-02T08:00:00Z" />
+      <string key="org:resource" value="bob" />
+      <string key="identity:id" value="e-2" />
+      <int key="amount" value="5" />
+    </event>
+  </trace>
+  <trace>
+    <string key="concept:name" value="001" />
+    <event>
+      <string key="concept:name" value="Submit" />
+      <date key="time:timestamp" value="2026-01-01T09:00:00Z" />
+      <string key="org:resource" value="alice" />
+      <string key="identity:id" value="e-0" />
+      <int key="amount" value="10" />
+    </event>
+    <event>
+      <string key="concept:name" value="Review" />
+      <date key="time:timestamp" value="2026-01-01T09:00:00Z" />
+      <string key="org:resource" value="alice" />
+      <string key="identity:id" value="e-1" />
+      <int key="amount" value="10" />
+    </event>
+  </trace>
+</log>

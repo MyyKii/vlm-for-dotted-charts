@@ -670,7 +670,7 @@ Use **MLflow** for meaningful VLM training and evaluation experiments.
 
 Prefer Hugging Face Trainer integration:
 ```python
-report_to="mlflow"
+report_to = "mlflow"
 ```
 Use the MLflow Tracking API for project-specific metrics, dataset metadata, and evaluation artifacts.
 

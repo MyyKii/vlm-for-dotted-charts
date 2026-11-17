@@ -23,8 +23,8 @@ dependencies = [
     "qwen-vl-utils>=0.0.14",
 
     # Event Log Processing
-    "pm4py",
-    "pandas",
+    "pm4py>=2.7",
+    "pandas>=3.0",
     "pyarrow",
 
     # Data Processing and Visualization
