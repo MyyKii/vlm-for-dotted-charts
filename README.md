@@ -2,7 +2,7 @@
 
 **LMU Munich · Winter Semester 2026/27 · Research project (work in progress)**
 
-This project investigates whether fine-tuned **Vision-Language Models (VLMs)** can detect, localize, and explain visual patterns in **Process Mining Dotted Charts**. The planned approach uses **Qwen3-VL-8B-Instruct** with parameter-efficient **QLoRA** fine-tuning; the 32B model is an optional candidate subject to GPU availability.
+This project investigates whether fine-tuned **Vision-Language Models (VLMs)** can detect, localize, and explain visual patterns in **Process Mining Dotted Charts**. The planned approach uses **Qwen3.5-9B** with parameter-efficient **QLoRA** fine-tuning; larger models may be considered depending on GPU availability.
 
 ## Background and Research Goal
 
@@ -32,11 +32,11 @@ The initial focus is on **visual detection, localization (bounding boxes), and e
 
 4. **Training data preparation:** Convert annotated charts into image–instruction–response examples.
 
-5. **VLM fine-tuning:** Prototype with Qwen3-VL-8B-Instruct and 4-bit QLoRA; consider 32B only after assessing GPU requirements.
+5. **VLM fine-tuning:** Prototype with **Qwen3.5-9B** and 4-bit QLoRA; consider larger models only after assessing GPU requirements.
 
 6. **Inference and evaluation:** Predict patterns and bounding boxes on unseen charts; visualize results, measure detection/localization quality, and track experiments with MLflow.
 
-We intend to compare performance against **zero-shot Qwen3-VL** (optionally Qwen2.5-VL as an additional baseline) and assess generalization from synthetic or modified logs to real-world data. Dataset choices, chart views, annotation conventions, and training settings are still under investigation.
+We intend to compare performance against **zero-shot Qwen3.5-9B** (optionally Qwen3-VL-8B-Instruct as an additional baseline) and assess generalization from synthetic or modified logs to real-world data. Dataset choices, chart views, annotation conventions, and training settings are still under investigation.
 
 ## Repository Structure
 
@@ -76,7 +76,7 @@ vlm-for-dotted-charts/
 | `docs/change_logs/` | Technical change logs for meaningful implementation and configuration changes. |
 | `src/data/` | Code for loading, preprocessing, and injecting patterns into event logs. |
 | `src/rendering/` | Code for generating Dotted Charts and mapping pattern locations to image coordinates. |
-| `src/training/` | Code for preparing training inputs and fine-tuning Qwen3-VL. |
+| `src/training/` | Code for preparing training inputs and fine-tuning Qwen3.5-9B. |
 | `src/evaluation/` | Code for evaluating model predictions, localization accuracy, and generalization. |
 | `data/raw/` | Original event logs, preserved without modification. |
 | `data/processed/` | Standardized and pattern-injected event logs in Parquet format, with JSON metadata. |
@@ -159,14 +159,50 @@ Dependencies are currently not fully pinned. Once the training stack works on th
 
 ## Preparing Event Logs
 
-Phase 1 supports manually downloaded, local `.xes` and `.csv` sources. After the
-editable installation above, prepare a log from the repository root:
+Event-log preparation supports local `.xes`/`.csv` files and HTTP(S) downloads.
+After the editable installation above, prepare a log from the repository root:
 
 ```bash
 python scripts/prepare_event_log.py \
     --input data/raw/receipt.xes \
     --output data/processed/receipt.parquet
 ```
+
+To download a source into `data/raw/` and prepare it through the same pipeline:
+
+```bash
+python scripts/prepare_event_log.py \
+    --url "https://example.org/event_log.xes" \
+    --output data/processed/event_log.parquet
+```
+
+Provide exactly one of `--input` or `--url`. The download uses the URL's filename;
+use `--filename receipt.xes` (or a `.csv`/`.xes.gz` name) for endpoints without a
+usable filename. Filenames must start with a letter, number, or underscore and
+contain only letters/numbers/underscores, spaces, dots, and hyphens. Paths and
+unsupported extensions are rejected. Downloads stream with timeouts and are
+published only after completion; failed transfers leave no partial source files.
+Existing downloads require `--overwrite`, which also permits replacing processed
+outputs. The JSON metadata records `source_url` alongside the checksum of the
+downloaded local file. Completed sources remain available if log validation fails.
+
+Gzip-compressed XES downloads are extracted automatically. For example:
+
+```bash
+python scripts/prepare_event_log.py \
+    --url "https://data.4tu.nl/file/533f66a4-8911-4ac7-8612-1235d65d1f37/3276db7f-8bee-4f2b-88ee-92dbffb5a893" \
+    --filename BPI_Challenge_2012.xes.gz \
+    --output data/processed/BPI_Challenge_2012.parquet \
+    --dataset-id bpic2012
+```
+
+Both `BPI_Challenge_2012.xes.gz` and `BPI_Challenge_2012.xes` are retained under
+`data/raw/`. The pipeline processes the extracted `.xes`, whose checksum is
+recorded in metadata alongside the original URL. Both raw destinations require
+`--overwrite` if either already exists. Failed downloads or extraction leave no
+incomplete files and preserve existing files. Use the extracted `.xes` for later
+local `--input` runs. Only gzip-compressed XES is extracted; other archive formats
+and compressed CSV are unsupported.
 
 For CSV files, map the source columns and specify the timezone of naive dates:
 
@@ -211,7 +247,7 @@ events = load_processed_event_log("data/processed/receipt.parquet")
 Reloading verifies the sidecar, checksum, schema, event counts, and UTC timestamps.
 Scalar optional attributes are supported; conversions that change values or
 dtypes fail before outputs are published. See the
-[event-log implementation and data contracts](docs/implementation_plan_event_logs.md)
+[Phase 1 event-log preparation documentation](docs/event_log_preparation.md)
 for the reusable module interfaces and current limitations.
 
 ## Development Workflow
@@ -311,7 +347,7 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) conventi
 
 4. Verify pixel-coordinate mapping after chart rendering and model image preprocessing.
 
-5. Run zero-shot Qwen3-VL and a small QLoRA training smoke test on the available GPU infrastructure.
+5. Run zero-shot Qwen3.5-9B and a small QLoRA training smoke test on the available GPU infrastructure.
 
 See [`docs/blueprint.md`](docs/blueprint.md) for the planned implementation phases, candidate training parameters, evaluation approach, and unresolved decisions.
 

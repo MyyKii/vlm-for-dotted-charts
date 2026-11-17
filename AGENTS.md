@@ -14,7 +14,7 @@ This LMU research project investigates whether a fine-tuned Vision-Language Mode
 
 - **Visualization and annotations:** Generate Dotted Charts with PM4Py where suitable or a deterministic custom renderer when necessary for accurate coordinate mapping; diversify views and produce verified pattern-instance labels and image-space bounding boxes.
 
-- **VLM approach:** Evaluate **Qwen3-VL-8B-Instruct** as the primary fine-tuning candidate and **Qwen3-VL-32B-Instruct** as the larger candidate if the university GPU environment supports it. Investigate supervised fine-tuning with QLoRA, and keep Qwen2.5-VL as an optional historical/zero-shot baseline rather than the default training target.
+- **VLM approach:** Evaluate **Qwen3.5-9B** as the primary fine-tuning candidate, with larger models considered depending on GPU availability. Investigate supervised fine-tuning with **QLoRA**, using zero-shot Qwen3.5-9B as the main baseline and Qwen3-VL-8B-Instruct as an optional comparison model.
 
 - **Evaluation:** Compare detection, localization, and evidence-based explanations on held-out charts and independent event logs using suitable classification and spatial metrics.
 
@@ -29,7 +29,7 @@ Prefer existing modules and APIs. The paths below describe responsibilities, and
 | `src/data/` | Event-log loading, preprocessing, validation, controlled pattern injection, and provenance |
 | `src/data/event_logs/` (planned) | Config, loader, preprocessing, validation, and Parquet storage for XES/CSV event logs |
 | `src/rendering/` | PM4Py or deterministic custom Dotted Chart rendering, visualization variants, coordinate mapping, and annotation checks |
-| `src/training/` | Model-agnostic VLM dataset formatting, Qwen3-VL inference, QLoRA training, model-specific processors, and output parsing |
+| `src/training/` | Model-agnostic VLM dataset formatting, Qwen3.5-9B inference, QLoRA training, model-specific processors, and output parsing |
 | `src/evaluation/` | Dataset splits, baselines, matching and localization metrics, and result analysis |
 | `scripts/` (when needed) | Thin command-line entry points calling reusable code in `src/` |
 | `tests/` | Fast, deterministic unit and integration tests, including small tracked fixtures and expected annotations |
@@ -92,33 +92,33 @@ Prefer existing modules and APIs. The paths below describe responsibilities, and
 
 - Prefer PM4Py for event-log processing and Dotted Chart generation when suitable. The classic PM4Py Dotted Chart renderer uses Graphviz/Neato; **do not assume** it provides Matplotlib `ax.transData` or usable event-to-pixel mappings. If accurate mappings are unavailable, use a **deterministic custom renderer** (e.g., Matplotlib) with explicit coordinate tracking. Make layout, style, and any random color assignment reproducible and record their settings. Validate boxes against final exported images with overlays and automated boundary tests.
 
-- Keep **model-independent ground truth** in original chart pixel coordinates separate from model-specific targets. Qwen3-VL 2D grounding uses normalized `[0, 1000]` coordinates **relative to the specific input view**; pure resizing that preserves the entire image content and coordinate frame leaves normalized positions unchanged, but **cropping or padding requires a new mapping** to the view. Qwen2.5-VL uses **absolute coordinates relative to the image size actually processed by its model/processor**, which may differ from the original. Implement tested conversions for each model, including box order, clipping, crop offsets, and round-trip overlays; never silently mix coordinate spaces.
+- Keep **model-independent ground truth** in original chart pixel coordinates separate from model-specific targets. **Qwen3.5-9B** uses normalized `[0, 1000]` coordinates for 2D bounding boxes, relative to the specific input image. Pure resizing preserves normalized coordinates, while **cropping or padding requires coordinate adjustments**. Implement and test coordinate conversions, including box order, clipping, crop offsets, and round-trip overlays. Ensure compatibility with optional comparison models and never mix coordinate spaces.
 
 - Keep injection metadata and other ground-truth information out of image-only model inputs. Explanations must describe visible evidence rather than inventing operational causes.
 
 ## Model selection, visual preprocessing, and fine-tuning
 
-- **Primary candidates:** `Qwen/Qwen3-VL-8B-Instruct` is the preferred first model for experiments; `Qwen/Qwen3-VL-32B-Instruct` is an optional larger-scale comparison when GPU memory, runtime, and access are sufficient. These are **candidates, not a pre-established performance ranking** for Dotted Charts. Keep model IDs and processor settings configurable; do not hard-code a single model throughout the pipeline.
+- **Primary candidate:** `Qwen/Qwen3.5-9B` is the preferred model for fine-tuning experiments. Larger models may be considered if GPU resources permit. Keep model IDs and processor settings configurable rather than hard-coding a single model throughout the pipeline.
 
-- **Optional comparison:** Qwen2.5-VL (e.g., the existing 3B/7B baseline) or InternVL3.5-8B/14B may be evaluated when scientifically useful and supported by the available environment. Do not add a second training framework or model family merely to provide nominal support.
+- **Optional comparison:** Use zero-shot Qwen3.5-9B as the primary baseline to measure fine-tuning improvements. Qwen3-VL-8B-Instruct may serve as an additional comparison model when scientifically useful.
 
-- **Hardware gating:** Obtain the **actual university GPU model, usable VRAM, driver/CUDA compatibility, and job limits** before committing to a training configuration. Treat 24 GB for 8B and 40–80 GB for 32B as **planning scenarios, not guarantees** that QLoRA will fit. Run a minimal **real multimodal** forward/backward smoke test at the intended chart resolution, batch size, sequence length, and trainable-module selection; measure peak VRAM, runtime, and gradient flow. Do not assume the 32B model fits on a 40 GB GPU or is necessarily better on this task.
+- **Hardware gating:** Verify the **available GPU model, VRAM, CUDA compatibility, and job limits** before selecting a training configuration. Run a small **multimodal QLoRA smoke test** at the intended image resolution and batch size; measure peak VRAM, runtime, and gradient flow. Do not assume that a particular model configuration fits without testing.
 
-- **Architecture and input resolution:** Qwen3-VL uses dynamic-resolution processing and multi-level vision features (DeepStack); neither guarantees that dense or tiny dots survive preprocessing. Preserve chart aspect ratios where possible, record original dimensions and effective processor resolution, inspect actual visual-token/image preprocessing behavior, and verify that target patterns remain visible. Test full images versus crops rather than assuming one representation is optimal.
+- **Architecture and input resolution:** Qwen3.5 supports multimodal image understanding, but dense Dotted Charts and tiny event markers may still pose challenges. Preserve chart aspect ratios, record original dimensions and effective processor resolution, and verify that relevant patterns remain visible after preprocessing. Compare full-chart inputs with cropped views where appropriate.
 
 - **Pixel budget:** Make image-resolution or `max_pixels` settings explicit and configurable after verifying the exact processor API. Values such as `1024 * 1024` pixels are **candidate limits only**. A pixel cap may discard small dots; compute/memory usage depends on the resulting visual tokens and other sequence/training settings, not on an unverified simple quadratic rule in input pixels.
 
-- **Fine-tuning stack:** Use the dependencies and interfaces that are actually installed and validated. Hugging Face Transformers/PEFT/TRL with 4-bit quantization is the baseline stack; **Unsloth** or **LLaMA-Factory** are optional alternatives only after checking support for the precise Qwen3-VL checkpoint, image processor, SFT/QLoRA path, GPU, CUDA version, and dataset/output format. Do not promise a fixed speedup or VRAM saving from framework marketing claims.
+- **Fine-tuning stack:** Use the dependencies and interfaces that are actually installed and validated. Hugging Face **Transformers/PEFT/TRL with 4-bit QLoRA** remains the baseline stack. **Unsloth** or **LLaMA-Factory** are optional alternatives after verifying support for **Qwen3.5-9B**, multimodal supervised fine-tuning, the image processor, GPU/CUDA compatibility, and dataset format. Do not assume performance or memory improvements without benchmarking.
 
 - **Trainable modules:** Start with a small, verified adapter configuration, inspect which language, vision, and multimodal-projector parameters actually receive gradients, and record the selection. **Do not assume that vision-encoder/projector LoRA is automatically attached or universally required.** Compare frozen vision components against selectively trainable vision/projector modules when hardware and research goals permit; check for overfitting and memory costs.
 
 - **Quantization and precision:** Validate `bitsandbytes` 4-bit support on the target GPU/CUDA stack, use supported `bf16`/`fp16` choices, and treat gradient checkpointing and optimized attention kernels as conditional optimizations. A small CPU or Mac environment can test data and output formatting, but cannot substitute for the planned CUDA QLoRA smoke test.
 
-- **Grounding contracts:** For Qwen3-VL, document and test `bbox_2d = [xmin, ymin, xmax, ymax]` normalized to `[0, 1000]` **for each view/crop**. Normalized boxes are invariant under pure resizing of the same view, but must be recomputed for crops, padding, or changes in framing. Keep original-image pixel boxes as canonical ground truth. For Qwen2.5-VL, determine the actual processor-resized image dimensions before interpreting its absolute boxes; do not treat them as original-image pixels by default. For InternVL3.5, verify the exact model/version contract. Test known boxes and image overlays in both directions before training.
+- **Grounding contracts:** For **Qwen3.5-9B**, document and test `bbox_2d = [xmin, ymin, xmax, ymax]` normalized to `[0, 1000]` **for each input view/crop**. Normalized boxes remain unchanged under pure resizing but must be recalculated for cropping, padding, or changes in framing. Keep original-image pixel coordinates as canonical ground truth. Implement and validate coordinate conversions, including box order, clipping, crop offsets, and bidirectional overlay tests before training. Verify coordinate conventions separately for optional comparison models.
 
 - **Fair model comparisons:** Compare candidates on the same held-out examples, prompt/output schema, annotation policy, image/view policy, and evaluation code. Report actual peak VRAM, preprocessing resolution, latency, cost, localization scores, and explanation quality. Model size and generic benchmark scores do **not** establish superior Dotted-Chart localization.
 
-Reference documentation (verify current revisions before implementation): [Qwen3-VL repository](https://github.com/QwenLM/Qwen3-VL), [Qwen3-VL 8B](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct), [Qwen3-VL 32B](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct), [Unsloth vision fine-tuning](https://unsloth.ai/docs/basics/vision-fine-tuning).
+Reference documentation (verify current revisions before implementation): [Qwen3.5-9B model](https://huggingface.co/Qwen/Qwen3.5-9B), [Qwen3.5 Transformers documentation](https://huggingface.co/docs/transformers/model_doc/qwen3_5), [Unsloth Qwen3.5 fine-tuning](https://unsloth.ai/docs/models/qwen3.5/fine-tune), [Unsloth vision fine-tuning](https://unsloth.ai/docs/basics/vision-fine-tuning).
 
 ## Experiments, comparability, and caching
 

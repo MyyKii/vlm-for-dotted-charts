@@ -26,6 +26,7 @@ dependencies = [
     "pm4py>=2.7",
     "pandas>=3.0",
     "pyarrow",
+    "requests",
 
     # Data Processing and Visualization
     "datasets",

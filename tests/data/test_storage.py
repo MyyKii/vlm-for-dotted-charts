@@ -38,6 +38,7 @@ def test_save_and_reload(prepared_log, tmp_path):
     assert metadata["num_cases"] == 2
     assert metadata["num_activities"] == 3
     assert metadata["source_file"] == config.input_path.name
+    assert "source_url" not in metadata
     assert metadata["source_sha256"] == hashlib.sha256(original).hexdigest()
     assert metadata["source_id"] == f"sha256:{hashlib.sha256(original).hexdigest()}"
     assert metadata["dataset_id"] == "sample"
@@ -79,6 +80,17 @@ def test_group_identifiers(prepared_log, tmp_path):
     )
     assert metadata["dataset_id"] == "receipt-january"
     assert metadata["split_group_id"] == "receipt"
+
+
+def test_source_url_preserves_local_checksum(prepared_log, tmp_path):
+    frame, config = prepared_log
+    url = "https://example.org/download?id=receipt"
+
+    metadata = save_processed_event_log(frame, config, tmp_path / "log.parquet", source_url=url)
+
+    assert metadata["source_url"] == url
+    assert metadata["source_sha256"] == hashlib.sha256(config.input_path.read_bytes()).hexdigest()
+    assert metadata["source_id"] == f"sha256:{metadata['source_sha256']}"
 
 
 def test_typed_optional_attributes_and_nanoseconds(prepared_log, tmp_path):

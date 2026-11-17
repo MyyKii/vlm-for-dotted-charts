@@ -61,6 +61,7 @@ def save_processed_event_log(
     *,
     dataset_id: str | None = None,
     split_group_id: str | None = None,
+    source_url: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, object]:
     """Write a Parquet log and same-stem JSON sidecar; return its metadata.
@@ -69,7 +70,8 @@ def save_processed_event_log(
     optional attributes and reject conversions that change values or dtypes.
     Source-local event IDs are scoped by the source checksum. Group IDs default
     to the dataset ID; callers can group related extracts explicitly. No split
-    assignment occurs here. Existing files require ``overwrite=True``.
+    assignment occurs here. Existing files require ``overwrite=True``. Optional
+    ``source_url`` records download provenance alongside the local file checksum.
     """
     findings = _validate_stored_log(frame, len(frame))
     source = Path(config.input_path)
@@ -132,6 +134,8 @@ def save_processed_event_log(
             "pandas_version": pd.__version__,
             "pyarrow_version": pa.__version__,
         }
+        if source_url is not None:
+            metadata["source_url"] = source_url
         staged_metadata.write_text(
             json.dumps(metadata, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False)
             + "\n",
