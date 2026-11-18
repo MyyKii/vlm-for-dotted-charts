@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "classes": [
+    "temporal_gap",
+    "batching",
+    "outlier",
+    "cluster",
+    "recurring_structure",
+    "workload_change"
+  ],
+  "presets": {
+    "gap_medium": {
+      "type": "temporal_gap",
+      "strategy": "shift_suffix",
+      "parameters": {"duration_minutes": 120}
+    },
+    "batch_small": {
+      "type": "batching",
+      "strategy": "synchronize_events",
+      "parameters": {"num_events": 25, "jitter_seconds": 30}
+    }
+  }
+}

@@ -4,7 +4,7 @@
 
 LMU Munich · Winter Semester 2026/27
 
-> **Status (17 November 2026):** Phase 1 (Event Log Collection & Processing) is complete for BPI Challenge 2012: the source log has been downloaded and processed into Parquet with JSON metadata. Phase 2 (Controlled Pattern Injection) is next. The remaining phases are planned and require empirical validation. This remains a working research blueprint, not a finalized experimental protocol.
+> **Status (17 November 2026):** Phase 1 (Event Log Collection & Processing) is complete for BPI Challenge 2012. Phase 2 implements Temporal Gap and Batching injection, controls, and provenance through the three-file variant contract. Phase 3 (Rendering & Inspection) is next; Phase 4 owns annotation and quality control. Later phases remain planned and require empirical validation. This remains a working research blueprint, not a finalized experimental protocol.
 >
 > Detailed implementation tasks are maintained separately. Repository conventions, testing requirements, and development safeguards are defined in `AGENTS.md`.
 
@@ -94,13 +94,13 @@ Its classical Dotted-Chart implementation uses Graphviz/Neato and does not direc
 
 For training, exact event-to-pixel relationships are particularly important.
 
-**Proposed rendering strategy:**
+**Proposed rendering strategy (Phase 3, after Phase-2 injection):**
 
-1. **Before full pattern-injection development**, render a small, contiguous subset of the standardized BPI Challenge 2012 Parquet log with PM4Py.
-2. Introduce one controlled Temporal Gap, render the original and modified views with identical settings, and inspect whether the gap is actually visible.
+1. Load saved Phase-2 variants and their corresponding selected baselines, using the recorded source selection or reversing the ordered event changes.
+2. Render baseline and modified views with matched settings through the production renderer. Inspect them in one `notebooks/review_charts.ipynb` that reuses those same rendering functions.
 3. Check whether PM4Py/Graphviz geometry can reliably be mapped to final PNG pixels (SVG inspection is optional).
 4. If reliable mapping is not feasible, implement a small deterministic Matplotlib renderer with explicit coordinate tracking.
-5. Validate final-image geometry and bounding boxes before expanding to all pattern classes or producing large training datasets.
+5. Record final-image geometry and coordinate mappings for Phase 4, which verifies visual labels, visibility, and bounding boxes before training-data generation. Phase-3 inspection does not approve annotations.
 
 PM4Py remains the central Process Mining library even if Matplotlib is used for training-image generation.
 
@@ -128,11 +128,9 @@ The effect of each diversity dimension is an experimental question.
 flowchart TD
     A["Raw Event Logs: XES / CSV / Synthetic"] --> B["1. Event Log Collection & Processing (completed for BPI 2012)"]
     B --> C["Validated Parquet + JSON Provenance"]
-    C --> P["Early gate A: PM4Py baseline chart (small subset)"]
-    P --> D["2. Controlled Pattern Injection: Temporal Gap first"]
-    D --> Q["Early gate B: compare charts + test pixel mapping"]
-    Q --> E["Modified Parquet + JSON Injection Manifest"]
-    E --> F["3. Dotted Chart Rendering & Diversification"]
+    C --> D["2. Controlled Pattern Injection & Provenance"]
+    D --> E["events.parquet + changes.parquet + manifest.json"]
+    E --> F["3. Production Rendering, Coordinate Mapping & Inspection"]
     F --> G["PNG Images + Rendering Metadata"]
     G --> H["4. Annotation & Quality Control"]
     E --> H
@@ -218,40 +216,56 @@ Use **Parquet as the internal tabular exchange format** between event-log proces
 
 **Deliverable:** A validated event-log representation with reproducible preparation metadata.
 
-The [Phase 1 documentation](event_log_preparation.md) explains the data flow, preparation steps, outputs, modules, CLI, and tests. **Next step:** reuse the processed BPI Challenge 2012 Parquet log for the first rendering and injection prototypes; do not repeat Phase 1 or build an automatic downloader as a prerequisite.
+The [Phase 1 documentation](event_log_preparation.md) explains the data flow, preparation steps, outputs, modules, CLI, and tests. Reuse the processed BPI Challenge 2012 log through the [Phase 2 injection pipeline](pattern_injection.md), then consume its saved variants in Phase 3; downloading or repeating Phase 1 is not a prerequisite.
 
-### Phase 2 — Controlled Pattern Injection 
+### Phase 2 — Controlled Pattern Injection
 
-**Goal:** Generate event-log variants containing controlled visual patterns with traceable intervention metadata.
+**Goal:** Generate reproducible event-log variants with controlled pattern candidates and traceable injection ground truth.
 
 #### Initial Pattern Catalog
 
-| Pattern | Candidate injection strategy | Expected visual evidence |
+| Pattern | Injection strategy | Expected visual evidence |
 | --- | --- | --- |
-| **Temporal Gap** | Shift or suspend events within a selected time interval | Empty or unusually sparse vertical time region |
-| **Batching** | Synchronize selected activity timestamps across multiple cases | Narrow vertical alignment or cluster of events |
-| **Case Delay / Outlier** | Introduce unusually long waiting times in selected cases | Isolated late events or extended case timelines |
-| **Workload Spike** | Increase arrivals or event frequency within a time window | Localized increase in point density |
+| **Temporal Gap** | Shift events after a selected cut-off | Empty time region |
+| **Batching** | Synchronize timestamps across cases | Vertically aligned dots |
+| **Outlier / Case Delay** | Delay selected case segments | Isolated late events |
+| **Cluster** | Concentrate events within a time interval | Localized dot clusters |
+| **Recurring Structure** | Repeat event/trace structures periodically | Repeated visual motifs |
+| **Workload Change** | Modify case arrivals or event density | Density spikes or shifts |
+
+**Implemented MVP:** Temporal Gap and Batching; remaining candidate patterns require individually approved transformation semantics. See the [Phase 2 guide](pattern_injection.md) for contracts, CLI, and limitations.
 
 #### Injection Requirements
 
-- Record pattern type, injection ID, affected events/cases, time interval, parameters, and random seed.
-- Preserve process dependencies where feasible; document intentional violations.
-- Support multiple instances of the same pattern and combinations of different patterns.
-- Preserve original logs and store modified event-log variants as **Parquet**, with their injection manifests in **JSON**.
-- Distinguish injected changes from naturally occurring visual structures.
+- Use a configurable JSON Pattern Catalog with reusable strategies and presets.
+- Support multiple independent variants per source log, including zero, one, or multiple injections per variant.
+- Allow explicit or seeded target selection and deterministic sampling of complete cases.
+- Preserve original logs, stable event IDs, and provenance; validate all transformations.
+- Support mixed patterns with deterministic execution order; initially reject conflicting modifications to the same events.
+- Support unchanged control variants without automatically classifying them as negative examples.
 
-**Important:** The visual manifestation of a pattern depends on the chart's time range, sorting, density, and rendering configuration.
+#### Injection Ground Truth
 
-Injection intervals must therefore not be treated as automatically valid bounding boxes.
+Each variant contains three mandatory artifacts:
 
-**Initial implementation priority:** Start with a small **Temporal Gap prototype** on a selected BPI Challenge 2012 subset, then perform the early chart/coordinate-mapping feasibility gate described below. Implement Batching next; expand to Delays/Outliers and Workload Spikes only after that gate is sufficiently resolved.
+- **`events.parquet`:** Complete resulting event log.
+- **`manifest.json`:** Source provenance, `variant_id`, `split_group_id`, injection IDs, pattern types, parameters, seeds, and precise candidate `target_regions` (time intervals or instants).
+- **`changes.parquet`:** Exact event-level modifications with before/after values and injection references.
 
-For the Temporal Gap prototype, retain stable event identities and event counts when using timestamp shifts, preserve the within-case sequence wherever feasible, and record all shifts. Other injection strategies may legitimately change event counts, but must document and validate those changes. Avoid deleting or visually hiding events merely to manufacture a gap without recording an actual controlled log transformation.
+All artifacts remain reproducible and linked through stable identifiers. The complete resulting log and ordered changes are checked against the selected baseline, including unchanged events and attributes. Phase 2 does not render or inspect charts.
 
-**Deliverable:** Modified event logs and structured injection manifests. The first milestone is a reproducible Temporal Gap prototype with a visually inspected PM4Py chart.
+**Important:** Injection ground truth records what changed and where a pattern candidate occurs in the event log. It does not establish whether the pattern is visually recognizable.
 
-### Phase 3 — Dotted Chart Rendering & Diversification
+#### Separation of Responsibilities
+
+- **Phase 2:** Event-log transformation and injection ground truth only.
+- **Phase 3:** Dotted Chart rendering, coordinate mapping, and interactive inspection using `notebooks/review_charts.ipynb`.
+- **Phase 4:** Verified visual labels, visibility assessment, bounding boxes, and validation of negative and hard-negative examples.
+- **Phase 5:** Generation of validated VLM training samples.
+
+**Deliverable:** Reproducible event-log variants with structured injection metadata and exact event-level provenance, ready for rendering and subsequent annotation.
+
+### Phase 3 — Dotted Chart Rendering, Inspection & Diversification
 
 **Goal:** Generate visually diverse, reproducible Dotted Charts and preserve the geometry required for annotation.
 
@@ -266,23 +280,22 @@ For the Temporal Gap prototype, retain stable event identities and event counts 
 | Rendering | PM4Py reference; deterministic Matplotlib implementation if needed |
 | Layout and styling | Explicitly configured and reproducible |
 
-#### Early Feasibility Gate (before full Phase 2/3 implementation)
+#### Initial Rendering & Inspection Gate (Phase 3)
 
-1. Load an existing **standardized Parquet** event log (BPI Challenge 2012), not the raw XES file again.
-2. Select a manageable, contiguous time window, retaining its source-log provenance and relevant case context.
-3. Render a **baseline PM4Py chart** with documented time axis, case ordering, colors, and image size.
-4. Inject a single Temporal Gap, write the modified Parquet and JSON manifest, and render the altered chart with identical display settings.
-5. Confirm the visual change and investigate whether PM4Py/Graphviz output supports reliable mapping of the affected region to final-image pixel coordinates.
-6. If mapping is unreliable, adopt a minimal deterministic Matplotlib renderer for annotated training charts; keep PM4Py as the reference visualization.
-7. Validate sample bounding boxes using overlays on the **final exported PNGs**. Do not treat injection metadata as sufficient ground truth.
+1. Load completed Phase-2 variants, including their manifests and changes; recover the matching selected baselines without rerunning injection or loading raw XES.
+2. Render baseline and modified views with matched time axes, case ordering, colors, and image dimensions through the production renderer.
+3. Create one `notebooks/review_charts.ipynb` to inspect those charts, reusing the same production rendering functions rather than a second preview renderer.
+4. Test whether PM4Py/Graphviz geometry supports reliable event-log-to-exported-PNG mapping. If needed, adopt a minimal deterministic custom renderer and retain PM4Py as the reference visualization.
+5. Document exported-image geometry, coordinate mappings, readability, and renderer limitations. Inspection does not approve candidate labels or classify positives/negatives.
+6. Hand final charts and mappings to Phase 4 for visibility decisions, canonical pixel bounding boxes, and annotation quality control.
 
-**Gate acceptance:** Baseline and modified charts are reproducible; the first injection is traceable; visual evidence is confirmed; and the renderer/coordinate-mapping decision is documented with its limitations. Scale up pattern injection and visual diversification only after this gate.
+**Gate acceptance:** Baseline and modified charts are reproducible with matched settings; injection identities remain traceable; and the renderer and event-to-image mapping are documented. This gate belongs to Phase 3 and does not block event-log transformation work in Phase 2.
 
 #### Rendering Strategy (after the gate)
 
 1. Use the validated renderer and coordinate-mapping method.
 2. Generate controlled variations of modified event logs.
-3. Record all view settings, event-to-pixel transformations, and image-space annotations.
+3. Record all view settings and event-to-exported-image transformations for subsequent annotation in Phase 4.
 
 **Candidate visual variations:**
 
@@ -298,11 +311,17 @@ For Matplotlib, initial experimental settings may include DPI around `300`, mark
 
 **Coordinate requirement:** Event-to-pixel mappings must correspond to the final exported image, including margins, axis labels, cropping, and resizing.
 
-**Deliverable:** PNG images, rendering configurations, and coordinate-mapping metadata.
+**Deliverable:** PNG images, rendering configurations, coordinate-mapping metadata, and one inspection notebook reusing the production renderer.
 
 ### Phase 4 — Ground-Truth Annotation & Quality Control
 
 **Goal:** Generate accurate, instance-level annotations for visible patterns in each chart.
+
+Use Phase-3 final charts and mappings to confirm candidate-class visibility,
+determine pixel bounding boxes, and validate positive, negative, and hard-negative
+examples. If interactive annotation is useful, extend the Phase-3 inspection
+notebook rather than duplicating plotting functions. Canonical annotations remain
+model-independent; Phase 5 converts them to the verified model-specific format.
 
 #### Annotation Model
 
@@ -342,21 +361,6 @@ Every annotation must explicitly reference the image dimensions and view configu
 
 For cropped views, store the crop's own bounding-box coordinates and retain the transform to its parent image.
 
-#### Model-Specific Coordinate Conversion
-
-For **Qwen3.5-9B**, use the proposed model-target convention `bbox_2d = [xmin, ymin, xmax, ymax]`, normalized to `[0, 1000]` relative to each specific input view. Validate the actual grounding/output behavior of the selected model and training stack before relying on it.
-
-For an input view with width `W` and height `H`:
-
-```text
-x_normalized = x_pixel / W * 1000
-y_normalized = y_pixel / H * 1000
-```
-
-Pure resizing of the same complete view preserves normalized coordinates. Cropping, padding, or changes in framing require explicit remapping.
-
-The reverse transformation must be applied during inference to visualize predictions on the original chart.
-
 #### Annotation Quality Control
 
 Validate:
@@ -391,6 +395,21 @@ Bounding Boxes
        \+
 Visual Explanations
 ```
+
+#### Model-Specific Coordinate Conversion
+
+For **Qwen3.5-9B**, use the proposed model-target convention `bbox_2d = [xmin, ymin, xmax, ymax]`, normalized to `[0, 1000]` relative to each specific input view. Validate the actual grounding/output behavior of the selected model and training stack before relying on it.
+
+For an input view with width `W` and height `H`:
+
+```text
+x_normalized = x_pixel / W * 1000
+y_normalized = y_pixel / H * 1000
+```
+
+Pure resizing of the same complete view preserves normalized coordinates. Cropping, padding, or changes in framing require explicit remapping.
+
+The reverse transformation must be applied during inference to visualize predictions on the original chart.
 
 #### Prompt Design
 

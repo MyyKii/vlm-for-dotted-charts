@@ -48,6 +48,9 @@ dev = [
 where = ["src"]
 namespaces = false
 
+[tool.setuptools.package-data]
+"data.pattern_injection" = ["configs/*.json"]
+
 [tool.ruff]
 line-length = 100
 

@@ -250,6 +250,25 @@ dtypes fail before outputs are published. See the
 [Phase 1 event-log preparation documentation](docs/event_log_preparation.md)
 for the reusable module interfaces and current limitations.
 
+## Controlled Pattern Injection
+
+Phase 2 creates deterministic Temporal Gap and Batching variants from Phase-1
+Parquet/JSON inputs. For example:
+
+```bash
+python scripts/inject_patterns.py \
+    --input data/processed/BPI_Challenge_2012.parquet \
+    --preset gap_medium --sample-cases 500 --seed 42 \
+    --output-root data/processed/injected
+```
+
+Each independent variant contains exactly `events.parquet`, `changes.parquet`,
+and `manifest.json`, preserving source data and stable identities. Ordered JSON
+recipes support nonconflicting injections; an empty recipe creates an unchanged
+control. Candidate locations use event-log coordinates and require later visual
+verification. See the [Phase 2 guide](docs/pattern_injection.md) for batching,
+targets, recipes, schemas, loading, safeguards, and limitations.
+
 ## Development Workflow
 
 ### Formatting, Linting, and Tests
