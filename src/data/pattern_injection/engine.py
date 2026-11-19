@@ -506,7 +506,7 @@ def _sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _baseline_sha256(frame: pd.DataFrame) -> str:
+def baseline_sha256(frame: pd.DataFrame) -> str:
     """Fingerprint every selected baseline value and dtype, keyed by stable event ID.
 
     Canonical Parquet bytes exclude transient indices and normalize the event time
@@ -698,7 +698,7 @@ def validate_variant(
             _validate_batch_update(restored, selected_after, injection)
     restored = restored.reset_index(drop=True)
     validate_events(restored, manifest["event_count_before"])
-    if _baseline_sha256(restored) != manifest["source"]["selected_baseline_sha256"]:
+    if baseline_sha256(restored) != manifest["source"]["selected_baseline_sha256"]:
         raise ValueError(
             "Change records cannot reconstruct the selected baseline: unrecorded changes"
         )
@@ -766,7 +766,7 @@ def create_variant(
         "processed_metadata_path": str(path.with_suffix(".json")),
         "processed_metadata_sha256": _sha256(path.with_suffix(".json")),
         "selection": selection,
-        "selected_baseline_sha256": _baseline_sha256(baseline),
+        "selected_baseline_sha256": baseline_sha256(baseline),
     }
     for key in ("source_file", "source_sha256", "source_id", "source_url", "processing_config"):
         if key in metadata:

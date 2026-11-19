@@ -269,6 +269,31 @@ control. Candidate locations use event-log coordinates and require later visual
 verification. See the [Phase 2 guide](docs/pattern_injection.md) for batching,
 targets, recipes, schemas, loading, safeguards, and limitations.
 
+## Rendering and Inspecting Dotted Charts
+
+Phase 3 uses one Matplotlib Agg renderer for inspection and export. With the
+project environment active, open a saved Phase-2 variant in Jupyter to compare
+the validated baseline and modified views in memory.
+
+```bash
+python -m pip install --group notebook
+jupyter lab notebooks/review_charts.ipynb
+```
+
+To export a clean pair, replace the variant directory with your saved path.
+
+```bash
+python scripts/render_charts.py \
+    --variant data/processed/injected/bpic2012/gap_60c363dc8f11e86a \
+    --view focused --injection-id inj_001 --region-id region_001 \
+    --context-hours 12 --role both
+```
+
+Each chart gets a `chart.png` and `rendering.json` under `data/generated/charts`.
+The metadata records the view, filters, source identity, and exported-image
+geometry for Phase 4. See the [Phase 3 guide](docs/dotted_chart_rendering.md) for
+view configurations, missing-baseline behavior, and coordinate mapping.
+
 ## Development Workflow
 
 ### Formatting, Linting, and Tests

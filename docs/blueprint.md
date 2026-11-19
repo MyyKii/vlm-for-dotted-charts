@@ -4,7 +4,7 @@
 
 LMU Munich · Winter Semester 2026/27
 
-> **Status (17 November 2026):** Phase 1 (Event Log Collection & Processing) is complete for BPI Challenge 2012. Phase 2 implements Temporal Gap and Batching injection, controls, and provenance through the three-file variant contract. Phase 3 (Rendering & Inspection) is next; Phase 4 owns annotation and quality control. Later phases remain planned and require empirical validation. This remains a working research blueprint, not a finalized experimental protocol.
+> **Status as of 19 November 2026** — Phase 1 is complete for BPI Challenge 2012. Phase 2 produces validated Temporal Gap, Batching, and control variants. Phase 3 implements matched chart rendering, in-memory inspection, and explicit PNG export with pixel geometry. Phase 4 owns annotation and quality control. Later phases require empirical validation.
 >
 > Detailed implementation tasks are maintained separately. Repository conventions, testing requirements, and development safeguards are defined in `AGENTS.md`.
 
@@ -86,25 +86,14 @@ Real event logs provide realistic background characteristics such as event densi
 
 However, injection metadata provides only **candidate annotations**. The final visual manifestation must be validated after rendering.
 
-### 1.3 Why PM4Py with an Optional Custom Renderer?
+### 1.3 Event-log processing and Dotted Chart rendering
 
-**PM4Py** is the primary library for event-log processing and the initial Dotted-Chart rendering reference.
-
-Its classical Dotted-Chart implementation uses Graphviz/Neato and does not directly expose Matplotlib coordinate transformations.
-
-For training, exact event-to-pixel relationships are particularly important.
-
-**Proposed rendering strategy (Phase 3, after Phase-2 injection):**
-
-1. Load saved Phase-2 variants and their corresponding selected baselines, using the recorded source selection or reversing the ordered event changes.
-2. Render baseline and modified views with matched settings through the production renderer. Inspect them in one `notebooks/review_charts.ipynb` that reuses those same rendering functions.
-3. Check whether PM4Py/Graphviz geometry can reliably be mapped to final PNG pixels (SVG inspection is optional).
-4. If reliable mapping is not feasible, implement a small deterministic Matplotlib renderer with explicit coordinate tracking.
-5. Record final-image geometry and coordinate mappings for Phase 4, which verifies visual labels, visibility, and bounding boxes before training-data generation. Phase-3 inspection does not approve annotations.
-
-PM4Py remains the central Process Mining library even if Matplotlib is used for training-image generation.
-
-**Image format:** PNG is the primary model input. SVG may be used when helpful for inspecting geometry but is not mandatory.
+PM4Py processes event logs and provides a Dotted Chart reference. Phase 3 uses
+Matplotlib Agg to measure the transform on the same canvas used for PNG export.
+The renderer loads a saved Phase-2 variant and verifies its selected baseline
+against the Phase-1 Parquet and recorded selection. One implementation serves
+both `notebooks/review_charts.ipynb` and explicit PNG export. Phase 4 uses the
+exported geometry to verify pattern visibility and define canonical pixel boxes.
 
 ### 1.4 Why Modular Data Synthesis?
 
@@ -129,6 +118,7 @@ flowchart TD
     A["Raw Event Logs: XES / CSV / Synthetic"] --> B["1. Event Log Collection & Processing (completed for BPI 2012)"]
     B --> C["Validated Parquet + JSON Provenance"]
     C --> D["2. Controlled Pattern Injection & Provenance"]
+    C -->|Selected baseline| F
     D --> E["events.parquet + changes.parquet + manifest.json"]
     E --> F["3. Production Rendering, Coordinate Mapping & Inspection"]
     F --> G["PNG Images + Rendering Metadata"]
@@ -271,47 +261,36 @@ All artifacts remain reproducible and linked through stable identifiers. The com
 
 #### Initial Chart Specification
 
-| Property | Proposed baseline |
+| Property | Implemented semantics |
 | --- | --- |
-| X-axis | Absolute event timestamp |
-| Y-axis | Cases, sorted by first event timestamp |
+| X-axis | Absolute UTC event timestamp |
+| Y-axis | Compact case rows ordered by first timestamp in the selected baseline |
 | Color | Activity |
-| Output format | PNG |
-| Rendering | PM4Py reference; deterministic Matplotlib implementation if needed |
-| Layout and styling | Explicitly configured and reproducible |
+| Rendering | Deterministic Matplotlib Agg drawing at the final PNG dimensions |
+| Layout | Fixed axes rectangle and bounded case tick labels |
 
-#### Initial Rendering & Inspection Gate (Phase 3)
+#### Inspection and diversification
 
-1. Load completed Phase-2 variants, including their manifests and changes; recover the matching selected baselines without rerunning injection or loading raw XES.
-2. Render baseline and modified views with matched time axes, case ordering, colors, and image dimensions through the production renderer.
-3. Create one `notebooks/review_charts.ipynb` to inspect those charts, reusing the same production rendering functions rather than a second preview renderer.
-4. Test whether PM4Py/Graphviz geometry supports reliable event-log-to-exported-PNG mapping. If needed, adopt a minimal deterministic custom renderer and retain PM4Py as the reference visualization.
-5. Document exported-image geometry, coordinate mappings, readability, and renderer limitations. Inspection does not approve candidate labels or classify positives/negatives.
-6. Hand final charts and mappings to Phase 4 for visibility decisions, canonical pixel bounding boxes, and annotation quality control.
+The production renderer aligns the time range, displayed case rows, and
+activity colors for matched full, time-window, and focused views. Independent
+case and activity filters preserve reference ordering and colors. When the
+source is missing, standalone modified charts record order and palette derived
+from the complete modified variant.
 
-**Gate acceptance:** Baseline and modified charts are reproducible with matched settings; injection identities remain traceable; and the renderer and event-to-image mapping are documented. This gate belongs to Phase 3 and does not block event-log transformation work in Phase 2.
+Use a small explicit list of views to vary time scope, case and activity
+selection, dimensions, marker size, opacity, palette, or legend. Full views
+show global workload and report pixels per case row. Time windows of complete
+variants retain all matching events for local inspection.
 
-#### Rendering Strategy (after the gate)
+#### Phase-4 handoff
 
-1. Use the validated renderer and coordinate-mapping method.
-2. Generate controlled variations of modified event logs.
-3. Record all view settings and event-to-exported-image transformations for subsequent annotation in Phase 4.
-
-**Candidate visual variations:**
-
-- Chart aspect ratio and image dimensions
-- Time windows and axis limits
-- Number and ordering of displayed cases
-- Marker size and transparency
-- Color palette and legend configuration
-- Event density
-- Full-chart and cropped views
-
-For Matplotlib, initial experimental settings may include DPI around `300`, marker size `s ≈ 3`, and transparency `alpha ≈ 0.6`. These values are illustrative and should be validated against chart readability.
-
-**Coordinate requirement:** Event-to-pixel mappings must correspond to the final exported image, including margins, axis labels, cropping, and resizing.
-
-**Deliverable:** PNG images, rendering configurations, coordinate-mapping metadata, and one inspection notebook reusing the production renderer.
+In-memory inspection can show candidate regions on the modified view. An
+explicit export writes a clean `chart.png` and versioned `rendering.json` with
+source provenance, role, view identity, effective filters, and top-left pixel
+geometry. Runtime event membership uses the selected stable IDs. Phase 4 owns
+visual verification, annotation, and the treatment of negative examples.
+See the [Phase 3 guide](dotted_chart_rendering.md) for the CLI, notebook, and
+geometry contract.
 
 ### Phase 4 — Ground-Truth Annotation & Quality Control
 

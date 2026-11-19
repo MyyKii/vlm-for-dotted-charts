@@ -16,7 +16,7 @@ scripts/inject_patterns.py       CLI options -> one preset or ordered recipe
                   v
 engine.create_variant()
   1. catalog.py + pattern_catalog.json -> resolve and validate presets
-  2. Load Phase-1 input; select complete cases -> baseline
+  2. Load Phase-1 input; use all cases by default or select complete cases -> baseline
   3. Resolve target(s) and exact assignments (explicit or seeded)
   4. Call patterns.py to modify timestamps
   5. Record changed events and intended target region(s)
@@ -45,7 +45,20 @@ data/processed/injected/<dataset_id>/<variant_id>/
 
 ## 2. End-to-end example: inject a Temporal Gap
 
-Run from the repository root after following the README installation instructions:
+Run from the repository root after following the README installation instructions.
+
+### Option A — Full event log (default; recommended for downstream chart generation)
+
+```bash
+python scripts/inject_patterns.py \
+  --input data/processed/BPI_Challenge_2012.parquet \
+  --preset gap_medium \
+  --seed 42
+```
+
+**No `--sample-cases` or `--case-id` flag means all cases and all events are included.** For BPI Challenge 2012, this means the complete standardized log (262,200 events). `--seed 42` still determines an automatically chosen injection target; it does **not** sample or remove cases when no case-selection flag is set.
+
+### Option B — Reproducible sample of 500 complete cases (optional)
 
 ```bash
 python scripts/inject_patterns.py \
@@ -55,19 +68,22 @@ python scripts/inject_patterns.py \
   --seed 42
 ```
 
-**What happens, in order:**
+Here, `--sample-cases 500` randomly selects **500 entire cases**, including all their events. `--seed 42` makes both the case selection and any automatically resolved injection target reproducible. This is useful for quicker development, testing and controlled experiments, but it reduces the event density relative to the complete log.
 
-1. **CLI -> recipe.** The CLI translates `--preset gap_medium` into an ordered, single-entry recipe. Here, no explicit target or parameter override was supplied:
+### What happens, in order
+
+1. **CLI -> recipe.** The CLI translates `--preset gap_medium` into an ordered, single-entry recipe. With neither an explicit target nor a parameter override:
+
    ```json
    [{"preset": "gap_medium", "seed": 42, "target": {}, "parameters": {}}]
    ```
+
 2. **Catalog -> effective configuration.** `resolve_preset()` loads `gap_medium`, which specifies `type=temporal_gap`, `strategy=shift_suffix`, and `duration_minutes=120`. CLI/recipe overrides can replace parameter defaults after validation.
-3. **Load -> baseline.** `create_variant()` uses the existing Phase-1 loader to read the `.parquet` and matching `.json` provenance. `select_complete_cases()` uses seed 42 to choose **500 whole cases** (all their events), not a cropped time interval. The selected event log is the **baseline** for this variant; the exact case IDs are retained in the manifest. With no subset flags, all cases are used.
+3. **Load -> baseline.** `create_variant()` uses the existing Phase-1 loader to read the `.parquet` and matching `.json` provenance. **Option A** uses the complete Phase-1 event log. **Option B** calls `select_complete_cases()` to select 500 complete cases using seed 42. In either case, the exact selected baseline and case IDs are recorded in the manifest.
 4. **Resolve target.** `resolve_cutoff()` picks an internal timestamp using the seed, or uses `--cutoff-utc` when provided. It records the actual cut-off and affected event/case IDs. A cut-off that shifts the entire log or selects no events is rejected.
 5. **Transform.** `patterns.shift_suffix()` copies the baseline and shifts **every event at/after the cut-off** forward by 120 minutes. Existing event IDs, event counts, unrelated attributes and within-case event order remain unchanged.
 6. **Record Ground Truth.** The engine compares the immediately preceding and resulting DataFrames via `_timestamp_changes()`. It creates change rows for moved events and a manifest entry describing the **empty time interval** produced by the gap.
 7. **Validate and save.** `create_variant()` returns `(events, manifest, changes)` **without writing files**. The CLI passes them to `save_variant()`, which verifies consistency and publishes one new, non-overwriting variant directory.
-
 A small example of step 5:
 
 | Event | Before | After |
@@ -88,7 +104,7 @@ For cut-off `12:00`, the candidate gap is **`[12:00, 14:00)`**, even though the 
 
 **Batching in practice:** With `num_events=25` and `jitter_seconds=30`, the engine selects **at most one event from each of 25 distinct cases** and assigns times inside `center ± 30 seconds`, constrained by each event's predecessor/successor. Targets and center can be specified explicitly; otherwise seeded selection finds feasible ones. It records the resolved event IDs, center and actual timestamp assignments. Infeasible explicit selections fail rather than being silently replaced. Only events whose timestamps actually changed produce change rows.
 
-The catalog currently lists six *candidate labels*, but only `temporal_gap` and `batching` have executable strategies. New presets using existing strategies require JSON edits only; new transformation algorithms require Python code and tests.
+The catalog currently lists six **candidate labels**, but only `temporal_gap` and `batching` have executable strategies. New presets using existing strategies require JSON edits only; new transformation algorithms require Python code and tests.
 
 ## 4. What exactly is saved?
 
@@ -107,7 +123,7 @@ data/processed/injected/
       ...
 ```
 
-**`events.parquet` — the result:** The **entire selected event log after all injections**, including unchanged events. It retains Phase-1 event identities (`identity:id`), case/activity fields, UTC timestamps, `@@source_row` and other attributes. Phase 3 will render this file.
+**`events.parquet` — the result:** The **entire selected event log after all injections**, including unchanged events. Without case-selection flags, this is the **full Phase-1 event log**; with `--sample-cases` or `--case-id`, it is the selected complete-case subset. It retains Phase-1 event identities (`identity:id`), case/activity fields, UTC timestamps, `@@source_row` and other attributes. Phase 3 renders this file.
 
 **`changes.parquet` — what actually changed:** One row per **changed event per injection**. Relevant columns:
 
@@ -156,21 +172,20 @@ A reduced illustration (not a complete manifest):
 The coordinates in `target_regions` are **event-log time/case coordinates, not pixel bounding boxes**. Their visual visibility and geometry are evaluated only after rendering.
 
 ## 5. Multiple injections, controls and reproducibility
-
-- **Multiple variants:** Rerun the CLI with different effective settings, seeds or case selections. Each run starts from the **Phase-1 source**, creating an independent sibling variant; it never implicitly builds on an injected variant.
+- **Multiple variants:** Rerun the CLI with different effective settings, seeds or case selections (including the default full log). Each run starts from the **Phase-1 source**, creating an independent sibling variant; it never implicitly builds on an injected variant.
 - **Multiple injections in one variant:** Use `--recipe recipe.json` with an **ordered list** of preset entries. Each receives its own `injection_id` (`inj_001`, `inj_002`, ...). The next injection sees the preceding result; its change rows describe its own immediate before/after state. **MVP constraint:** An event can be targeted by at most one injection, and later injections may not invalidate earlier target regions. Conflicts fail; no automatic conflict resolution.
 - **Unmodified control:** Use an empty recipe `[]`. Its `events.parquet` equals the selected baseline, `manifest.json` has `injections: []`, and `changes.parquet` is empty **but has the same typed schema**. A control is not automatically a negative training example.
 - **Variant identity:** A short `gap_`, `batch_`, `mixed_` or `control_` prefix plus a deterministic 16-character digest reflects the effective source, selected cases and ordered injection configuration/targets. Unused presets do not change the ID. Existing variants are **never overwritten**.
-
-Example control:
+Example control using the **full log** (default):
 
 ```bash
 printf '[]\n' > control.json
 python scripts/inject_patterns.py \
   --input data/processed/BPI_Challenge_2012.parquet \
-  --recipe control.json --sample-cases 500 --seed 42
+  --recipe control.json --seed 42
 ```
 
+For a **500-case control**, add `--sample-cases 500` to the command. The control's `events.parquet` contains the full or selected baseline, respectively, without any injected changes.
 For a multi-injection recipe, write a JSON list of entries such as:
 
 ```json
@@ -182,33 +197,33 @@ For a multi-injection recipe, write a JSON list of entries such as:
 ]
 ```
 
-*Illustrative fixture-specific IDs and timestamps: real targets must exist and pass feasibility checks.*
+**Illustrative fixture-specific IDs and timestamps: real targets must exist and pass feasibility checks.**
 
 ## 6. Save/load integrity and useful commands
-
 `validate_variant()` checks schemas, IDs, per-injection change counts, target regions and transformation constraints. Crucially, it **reverses the recorded timestamp changes**, reconstructs the selected baseline and compares its fingerprint (`selected_baseline_sha256`). This detects undocumented edits, including a mutated control. File checksums separately detect changed saved Parquet bytes.
-
 `save_variant()` writes to a temporary directory, verifies Parquet round-trips and `load_variant()` checks, then publishes exactly three files without overwriting. Incomplete directories are rejected; interrupted publication may require manual removal of the partial directory. Older variants lacking the baseline fingerprint must be regenerated. Fingerprint reproducibility depends on compatible Pandas/PyArrow versions, recorded in the manifest.
+
+**Python API — full event log (default):**
 
 ```python
 from data.pattern_injection.engine import create_variant, save_variant, load_variant
-
 events, manifest, changes = create_variant(
     "data/processed/BPI_Challenge_2012.parquet",
     [{"preset": "gap_medium"}],
-    sample_cases=500,
     seed=42,
 )
 path = save_variant(events, manifest, changes, "data/processed/injected")
 events, manifest, changes = load_variant(path)
 ```
 
+**Optional case sampling:** Pass `sample_cases=500` to `create_variant()` to inject into a seeded selection of 500 complete cases instead. Omit the parameter to use all cases. The seed can still affect injection-target selection even when no sampling is performed.
+
 | CLI option | Function |
 | --- | --- |
 | `--input` | Required Phase-1 `.parquet` with matching `.json` provenance. |
 | `--preset` / `--recipe` | Exactly one: one catalog preset or an ordered JSON recipe (`[]` for a control). |
-| `--sample-cases N` / repeated `--case-id ID` | Select complete baseline cases (mutually exclusive); default is all cases. |
-| `--seed` | Reproducible selection, default `42`; default per-recipe injection seed. |
+| `--sample-cases N` / repeated `--case-id ID` | Optional, mutually exclusive selectors for complete baseline cases. **Omit both to inject into the full event log.** |
+| `--seed` | Reproducible case sampling **when sampling is enabled** and seeded injection target selection in either mode; default `42` and default per-recipe injection seed. |
 | `--cutoff-utc`, `--duration-minutes` | Gap target / duration override. |
 | `--center-utc`, `--num-events`, `--jitter-seconds` | Batch center / size / jitter override. |
 | `--start-utc`, `--end-utc`, repeated `--target-case-id`, `--event-id`, `--activity` | Batch eligibility filters / explicit event IDs. |
@@ -218,7 +233,9 @@ Target/parameter flags apply only with `--preset` (put per-instance settings int
 
 ## 7. Handoff and current limits
 
-Phase 3 loads a variant with `load_variant(path)` and uses `events.parquet` for Dotted Charts and `manifest.json`/`changes.parquet` for candidate pattern locations and event provenance. It can reconstruct the baseline from Phase-1 source/selection or reverse the recorded changes. Phase 4 then verifies visible labels, boxes, class-specific negatives and hard negatives; Phase 5 exports model-compatible training examples. Keep `dataset_id`, `variant_id`, `injection_id`, stable event IDs and `split_group_id` across these stages to avoid train/test leakage.
+For primary VLM data generation, prefer **full-log injections** and let Phase 3 produce explicit time-window or focused views. Sampling complete cases in Phase 2 is optional and changes the underlying event density; a Phase-3 time-window view of a full-log variant preserves all events within that window.
+
+Phase 3 loads variants with `load_variant(path)`. For matched views, it recovers the selected baseline from the recorded Phase-1 Parquet and verifies it using `baseline_sha256()`. A missing source permits a standalone modified view with its own reference ordering and colors. The [Phase 3 guide](dotted_chart_rendering.md) covers chart export, candidate inspection, and geometry. Phase 4 verifies visible labels, boxes, class-specific negatives and hard negatives. Phase 5 exports model-compatible training examples. Keep `dataset_id`, `variant_id`, `injection_id`, stable event IDs, and `split_group_id` across these stages to retain provenance and avoid train/test leakage.
 
 **Not part of Phase 2:** chart rendering or notebooks, review decisions, pixel boxes, automatic negative labels, training data, added/removed events, additional pattern algorithms and general overlapping-injection composition. The schema anticipates some of these without implementing them.
 
