@@ -14,11 +14,13 @@ def validate_parameters(strategy: str, parameters: dict) -> None:
     """Reject unknown strategies, misspelled options, and nonfinite parameters."""
     if not isinstance(strategy, str) or strategy not in STRATEGY_TYPES:
         raise ValueError(f"Unsupported strategy: {strategy!r}")
-    required = (
-        {"duration_minutes"} if strategy == "shift_suffix" else {"num_events", "jitter_seconds"}
-    )
-    if not isinstance(parameters, dict) or set(parameters) != required:
-        raise ValueError(f"{strategy} parameters must be exactly {sorted(required)}")
+    batching = strategy == "synchronize_events"
+    required = {"num_events", "jitter_seconds"} if batching else {"duration_minutes"}
+    allowed = required | {"min_events"} if batching else required
+    if not isinstance(parameters, dict) or not required <= parameters.keys() <= allowed:
+        raise ValueError(
+            f"{strategy} parameters require {sorted(required)} and allow {sorted(allowed)}"
+        )
     for name, value in parameters.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{name} must be a finite nonnegative number")
@@ -30,10 +32,13 @@ def validate_parameters(strategy: str, parameters: dict) -> None:
             raise ValueError(f"{name} must be a finite nonnegative number")
     if strategy == "shift_suffix" and parameters["duration_minutes"] <= 0:
         raise ValueError("duration_minutes must be positive")
-    if strategy == "synchronize_events" and (
-        type(parameters["num_events"]) is not int or parameters["num_events"] < 2
-    ):
-        raise ValueError("num_events must be an integer of at least 2")
+    if batching:
+        count = parameters["num_events"]
+        if type(count) is not int or count < 2:
+            raise ValueError("num_events must be an integer of at least 2")
+        minimum = parameters.get("min_events", count)
+        if type(minimum) is not int or not 2 <= minimum <= count:
+            raise ValueError("min_events must be an integer between 2 and num_events")
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict:
@@ -80,6 +85,8 @@ def resolve_preset(catalog: dict, name: str, parameters: dict | None = None) -> 
             raise ValueError("Parameter overrides must be an object")
         preset["parameters"].update(parameters)
     validate_parameters(preset["strategy"], preset["parameters"])
+    if preset["strategy"] == "synchronize_events":
+        preset["parameters"].setdefault("min_events", preset["parameters"]["num_events"])
     # Numerically equivalent JSON/CLI settings share an effective identity.
     for key in ("duration_minutes", "jitter_seconds"):
         if key in preset["parameters"]:

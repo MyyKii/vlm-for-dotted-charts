@@ -76,6 +76,28 @@ def test_unknown_preset_and_parameters():
         resolve_preset(load_catalog(), "gap_medium", {"typo": 1})
 
 
+@pytest.mark.parametrize("minimum", [1, 26, 2.0, True, None, "10"])
+def test_batch_minimum_requires_an_integer_in_bounds(minimum):
+    with pytest.raises(ValueError, match="min_events"):
+        resolve_preset(load_catalog(), "batch_small", {"min_events": minimum})
+
+
+def test_batch_minimum_defaults_to_overridden_target():
+    catalog = load_catalog()
+    assert resolve_preset(catalog, "batch_small")["parameters"]["min_events"] == 25
+    resolved = resolve_preset(catalog, "batch_small", {"num_events": 3})["parameters"]
+    assert resolved["min_events"] == resolved["num_events"] == 3
+    assert "min_events" not in catalog["presets"]["batch_small"]["parameters"]
+
+
+def test_explicit_preset_minimum_survives_target_override():
+    catalog = load_catalog()
+    catalog["presets"]["batch_small"]["parameters"]["min_events"] = 10
+    resolved = resolve_preset(catalog, "batch_small", {"num_events": 18})["parameters"]
+    assert resolved["num_events"] == 18
+    assert resolved["min_events"] == 10
+
+
 def test_reproducible_complete_case_selection(injection_log):
     before = injection_log.copy(deep=True)
     first, selection = select_complete_cases(injection_log, sample_cases=2, seed=7)

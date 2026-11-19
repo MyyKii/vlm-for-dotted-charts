@@ -102,7 +102,31 @@ For cut-off `12:00`, the candidate gap is **`[12:00, 14:00)`**, even though the 
 | `shift_suffix` (`temporal_gap`) | Explicit `cutoff_utc`, or seeded internal cut-off. | Shift all timestamps from cut-off by positive `duration_minutes`. | Empty, half-open UTC interval `[cutoff, cutoff + duration)`; all cases. |
 | `synchronize_events` (`batching`) | Explicit event/case/activity/time filters and/or seeded selection of feasible events and center. | Assign selected events timestamps near the center, preserving case order. | `instant` if all assigned timestamps match; otherwise a nonempty interval containing them. |
 
-**Batching in practice:** With `num_events=25` and `jitter_seconds=30`, the engine selects **at most one event from each of 25 distinct cases** and assigns times inside `center ± 30 seconds`, constrained by each event's predecessor/successor. Targets and center can be specified explicitly; otherwise seeded selection finds feasible ones. It records the resolved event IDs, center and actual timestamp assignments. Infeasible explicit selections fail rather than being silently replaced. Only events whose timestamps actually changed produce change rows.
+`num_events` is the target number of moved events, one per distinct case.
+Optional `min_events` must be an integer from 2 through `num_events`. It
+defaults to the effective `num_events` after recipe overrides, so recipes
+without a minimum request a fixed-size batch.
+
+With `num_events=25` and `min_events=10`, automatic event selection moves
+25 events when at least 25 cases can move, moves 18 when 18 cases can move,
+and rejects a center with only 7 movable cases. An automatically chosen
+center maximizes the attainable size up to `num_events`. The seed selects
+among equally sized candidates. Explicit `event_ids` always require exactly
+`num_events` IDs from distinct cases, all movable at the resolved center.
+
+When both `start_utc` and `end_utc` are supplied, they form a half-open UTC
+interval for original event eligibility and the automatic center search.
+The start is inclusive and the end is exclusive. An explicit `center_utc`
+can be outside that interval. Assigned timestamps can also fall outside it
+when the jitter window and case bounds allow them.
+
+With `jitter_seconds=30`, assignments fall within `center ± 30 seconds` and
+preserve predecessor, successor, and source-row tie order. The resolver
+counts a case toward center feasibility only when an eligible event in it can
+move to a different timestamp. The manifest records the effective parameters,
+selected IDs, center, and new timestamps. Each moved event produces one change
+row. For VLM training variants, deliberately vary `num_events` through recipe
+overrides or dedicated presets. Use `min_events` to handle candidate shortages.
 
 The catalog currently lists six **candidate labels**, but only `temporal_gap` and `batching` have executable strategies. New presets using existing strategies require JSON edits only; new transformation algorithms require Python code and tests.
 
@@ -199,14 +223,33 @@ For a multi-injection recipe, write a JSON list of entries such as:
 
 **Illustrative fixture-specific IDs and timestamps: real targets must exist and pass feasibility checks.**
 
+The bundled two-pattern recipe requests a batch of 25 events with a minimum
+of 10 and 30 seconds of jitter. The automatic center search is restricted to
+10 January 2012 UTC. The recipe applies the Temporal Gap after the batch.
+[Bundled recipe](../configs/recipes/multiple_patterns.json)
+
+```bash
+python scripts/inject_patterns.py \
+  --input data/processed/BPI_Challenge_2012.parquet \
+  --recipe configs/recipes/multiple_patterns.json
+```
+
 ## 6. Save/load integrity and useful commands
 `validate_variant()` checks schemas, IDs, per-injection change counts, target regions and transformation constraints. Crucially, it **reverses the recorded timestamp changes**, reconstructs the selected baseline and compares its fingerprint (`selected_baseline_sha256`). This detects undocumented edits, including a mutated control. File checksums separately detect changed saved Parquet bytes.
+New batch manifests record `min_events` and require their resolved event IDs
+to match the IDs in `changes.parquet`. Earlier manifests that omit
+`min_events` retain their original fixed-size validation, which permits
+unchanged events in the resolved selection. Regenerating a batch recipe can
+produce a different variant ID because the effective parameters and resolved
+targets contribute to the digest.
+
 `save_variant()` writes to a temporary directory, verifies Parquet round-trips and `load_variant()` checks, then publishes exactly three files without overwriting. Incomplete directories are rejected; interrupted publication may require manual removal of the partial directory. Older variants lacking the baseline fingerprint must be regenerated. Fingerprint reproducibility depends on compatible Pandas/PyArrow versions, recorded in the manifest.
 
 **Python API — full event log (default):**
 
 ```python
 from data.pattern_injection.engine import create_variant, save_variant, load_variant
+
 events, manifest, changes = create_variant(
     "data/processed/BPI_Challenge_2012.parquet",
     [{"preset": "gap_medium"}],
@@ -225,8 +268,9 @@ events, manifest, changes = load_variant(path)
 | `--sample-cases N` / repeated `--case-id ID` | Optional, mutually exclusive selectors for complete baseline cases. **Omit both to inject into the full event log.** |
 | `--seed` | Reproducible case sampling **when sampling is enabled** and seeded injection target selection in either mode; default `42` and default per-recipe injection seed. |
 | `--cutoff-utc`, `--duration-minutes` | Gap target / duration override. |
-| `--center-utc`, `--num-events`, `--jitter-seconds` | Batch center / size / jitter override. |
-| `--start-utc`, `--end-utc`, repeated `--target-case-id`, `--event-id`, `--activity` | Batch eligibility filters / explicit event IDs. |
+| `--center-utc`, `--num-events`, `--jitter-seconds` | Batch center, target size, and jitter overrides. Configure `min_events` in a recipe or preset. |
+| `--start-utc`, `--end-utc` | Half-open UTC interval for event eligibility and automatic centers. Supply both endpoints. |
+| Repeated `--target-case-id`, `--event-id`, `--activity` | Batch case and activity filters and explicit event IDs. |
 | `--catalog`, `--output-root` | Alternative catalog; output root (default `data/processed/injected`). |
 
 Target/parameter flags apply only with `--preset` (put per-instance settings into a recipe). Explicit timestamps must be UTC (`Z` or `+00:00`). Use `python scripts/inject_patterns.py --help` for details. The CLI prints variant ID, event/injection/change counts and output path; processing errors exit with code 1, argument errors with code 2.

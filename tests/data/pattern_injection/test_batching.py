@@ -11,6 +11,7 @@ from data.pattern_injection.engine import (
     load_variant,
     resolve_batch_target,
     save_variant,
+    validate_variant,
 )
 
 
@@ -30,6 +31,23 @@ def batch_recipe(*, ids=None, center="2026-01-01T09:00:00Z", jitter=0, count=2, 
 
 def gap():
     return {"preset": "gap_medium", "target": {"cutoff_utc": "2026-01-01T12:00:00Z"}}
+
+
+def work_windows(case_times: list[tuple[int, int, int]], unit: str = "s") -> pd.DataFrame:
+    origin = pd.Timestamp("2026-01-01T10:00:00Z")
+    return pd.DataFrame(
+        {
+            "case:concept:name": f"case-{case}",
+            "concept:name": activity,
+            "time:timestamp": origin + pd.Timedelta(offset, unit=unit),
+            "identity:id": f"event-{case}-{activity}",
+            "@@source_row": 3 * case + position,
+        }
+        for case, times in enumerate(case_times)
+        for position, (activity, offset) in enumerate(
+            zip(("Start", "Work", "End"), times, strict=True)
+        )
+    )
 
 
 def test_instant_batch_exact_updates(injection_source, injection_log):
@@ -166,15 +184,152 @@ def test_automatic_event_selection_prefers_modifying_alternatives_within_case(in
     assert "event-0-Work" not in selected["event_ids"]
 
 
-def test_automatic_selection_retains_required_cases_with_forced_unchanged_events(injection_log):
-    selected = resolve_batch_target(
+def test_automatic_selection_rejects_insufficient_movable_cases_at_manual_center(injection_log):
+    with pytest.raises(ValueError, match="too few distinct cases can move"):
+        resolve_batch_target(
+            injection_log,
+            {"activities": ["Work"], "center_utc": "2026-01-01T10:00:00Z"},
+            {"num_events": 4, "jitter_seconds": 0},
+            42,
+        )
+
+
+@pytest.mark.parametrize("fixed_center", [True, False])
+def test_pinned_event_does_not_count_toward_batch_size(injection_log, fixed_center):
+    center = pd.Timestamp("2026-01-01T10:30:00Z")
+    injection_log.loc[injection_log["case:concept:name"].eq("case-0"), "time:timestamp"] = center
+    target = {"activities": ["Work"]}
+    if fixed_center:
+        target["center_utc"] = center.isoformat()
+    parameters = {"num_events": 3, "jitter_seconds": 30}
+    resolved = resolve_batch_target(injection_log, target, parameters, 42)["resolved"]
+    assert resolved["case_ids"] == ["case-1", "case-2", "case-3"]
+    with pytest.raises(ValueError, match="Infeasible batch target"):
+        resolve_batch_target(injection_log, target, parameters | {"num_events": 4}, 42)
+
+
+def test_center_sweep_counts_overlapping_events_in_one_case_once(injection_log):
+    pinned = injection_log["case:concept:name"].eq("case-1")
+    injection_log.loc[pinned, "time:timestamp"] = pd.Timestamp("2026-01-01T10:30:00Z")
+    injection_log.loc[injection_log["identity:id"].eq("event-0-Start"), "concept:name"] = "Work"
+    with pytest.raises(ValueError, match="no center lets enough distinct cases move"):
+        resolve_batch_target(
+            injection_log,
+            {"activities": ["Work"], "case_ids": ["case-0", "case-1"]},
+            {"num_events": 2, "jitter_seconds": 30},
+            42,
+        )
+
+
+def test_center_sweep_finds_one_nanosecond_between_original_destinations(injection_log):
+    start = pd.Timestamp("2026-01-01T10:00:00Z")
+    end = start + pd.Timedelta(2, unit="ns")
+    injection_log["time:timestamp"] = injection_log["time:timestamp"].dt.as_unit("ns")
+    injection_log.loc[:5, "time:timestamp"] = [start, start, end, start, end, end]
+    resolved = resolve_batch_target(
         injection_log,
-        {"activities": ["Work"], "center_utc": "2026-01-01T10:00:00Z"},
-        {"num_events": 4, "jitter_seconds": 0},
+        {"event_ids": ["event-0-Work", "event-1-Work"]},
+        {"num_events": 2, "jitter_seconds": 0},
         42,
     )["resolved"]
-    assert len(selected["event_ids"]) == len(selected["case_ids"]) == 4
-    assert selected["assigned_timestamps_utc"]["event-0-Work"] == "2026-01-01T10:00:00+00:00"
+    assert pd.Timestamp(resolved["center_utc"]) == start + pd.Timedelta(1, unit="ns")
+
+
+@pytest.mark.parametrize(("movable_cases", "batch_size"), [(30, 25), (18, 18), (7, 0)])
+@pytest.mark.parametrize("fixed_center", [True, False])
+def test_batch_targets_size_with_a_minimum(movable_cases, batch_size, fixed_center):
+    frame = work_windows([(0, 10, 20)] * movable_cases + [(10, 10, 10)] * (30 - movable_cases))
+    target = {"activities": ["Work"]}
+    if fixed_center:
+        target["center_utc"] = "2026-01-01T10:00:15Z"
+    parameters = {"num_events": 25, "min_events": 10, "jitter_seconds": 0}
+    if not batch_size:
+        with pytest.raises(ValueError, match="Infeasible batch target"):
+            resolve_batch_target(frame, target, parameters, 42)
+        return
+
+    resolved = resolve_batch_target(frame, target, parameters, 42)["resolved"]
+    assert len(resolved["event_ids"]) == len(resolved["case_ids"]) == batch_size
+    assert set(resolved["case_ids"]) <= {f"case-{case}" for case in range(movable_cases)}
+    assert all(
+        pd.Timestamp(timestamp) != pd.Timestamp("2026-01-01T10:00:10Z")
+        for timestamp in resolved["assigned_timestamps_utc"].values()
+    )
+
+
+def test_automatic_center_prefers_the_largest_batch_and_breaks_ties_by_seed():
+    frame = work_windows([(0, 10, 20)] * 12 + [(60, 70, 80)] * 18)
+    parameters = {"num_events": 25, "min_events": 10, "jitter_seconds": 0}
+    target = {"activities": ["Work"]}
+    centers = set()
+    for seed in (0, 1, 42):
+        selection = resolve_batch_target(frame, target, parameters, seed)
+        assert selection == resolve_batch_target(frame, target, parameters, seed)
+        resolved = selection["resolved"]
+        assert len(resolved["event_ids"]) == 18
+        assert pd.Timestamp(resolved["center_utc"]) >= pd.Timestamp("2026-01-01T10:01:00Z")
+        centers.add(resolved["center_utc"])
+    assert len(centers) > 1
+
+
+def test_automatic_center_sweep_includes_clipped_interval_edges():
+    frame = work_windows([(0, 5, 20)] * 2, unit="ns")
+    origin = frame["time:timestamp"].min()
+    start = origin + pd.Timedelta(3, unit="ns")
+    end = origin + pd.Timedelta(8, unit="ns")
+    target = {"activities": ["Work"], "start_utc": start.isoformat(), "end_utc": end.isoformat()}
+    parameters = {"num_events": 2, "min_events": 2, "jitter_seconds": 0}
+    centers = {
+        pd.Timestamp(
+            resolve_batch_target(frame, target, parameters, seed)["resolved"]["center_utc"]
+        )
+        for seed in range(12)
+    }
+    assert start in centers
+    assert end - pd.Timedelta(1, unit="ns") in centers
+    assert all(start <= center < end for center in centers)
+
+
+def test_exclusive_end_cannot_be_the_only_automatic_center():
+    frame = work_windows([(0, 0, 1)] * 2, unit="ns")
+    start, end = frame["time:timestamp"].min(), frame["time:timestamp"].max()
+    target = {"activities": ["Work"], "start_utc": start.isoformat(), "end_utc": end.isoformat()}
+    parameters = {"num_events": 2, "min_events": 2, "jitter_seconds": 0}
+    with pytest.raises(ValueError, match="no center lets enough distinct cases move"):
+        resolve_batch_target(frame, target, parameters, 42)
+
+    resolved = resolve_batch_target(frame, target, parameters | {"jitter_seconds": 1e-9}, 42)[
+        "resolved"
+    ]
+    assert pd.Timestamp(resolved["center_utc"]) == start
+    assert all(pd.Timestamp(value) == end for value in resolved["assigned_timestamps_utc"].values())
+
+
+def test_batch_minimum_applies_to_eligibility_and_exact_ids_still_use_target(injection_log):
+    parameters = {"num_events": 4, "min_events": 3, "jitter_seconds": 0}
+    with pytest.raises(ValueError, match="fewer than 3 eligible distinct cases"):
+        resolve_batch_target(injection_log, {"case_ids": ["case-0", "case-1"]}, parameters, 42)
+    target = {"event_ids": ["event-0-Work", "event-1-Work", "event-2-Work"]}
+    with pytest.raises(ValueError, match="event_ids must match num_events"):
+        resolve_batch_target(injection_log, target, parameters, 42)
+
+
+def test_reduced_batch_round_trips_with_effective_minimum(injection_source, tmp_path):
+    entry = batch_recipe(center="2026-01-01T10:00:00Z", count=4)
+    entry["parameters"]["min_events"] = 2
+    entry["target"]["activities"] = ["Work"]
+    first = create_variant(injection_source, [entry])
+    output = save_variant(*first, tmp_path / "reduced")
+    events, manifest, changes = load_variant(output)
+    assert_frame_equal(events, first[0])
+    assert_frame_equal(changes, first[2])
+    injection = manifest["injections"][0]
+    assert injection["parameters"] == {"num_events": 4, "min_events": 2, "jitter_seconds": 0}
+    assert injection["affected"]["event_count"] == injection["affected"]["case_count"] == 3
+    assert set(injection["selection"]["resolved"]["event_ids"]) == set(changes["event_id"])
+    injection["parameters"]["min_events"] = 4
+    with pytest.raises(ValueError, match="Batch resolved targets"):
+        validate_variant(events, manifest, changes)
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 42])
@@ -192,15 +347,10 @@ def test_jitter_assignments_change_events_when_a_modifying_timestamp_is_feasible
     assert changes["timestamp_before_utc"].ne(changes["timestamp_after_utc"]).all()
 
 
-def test_unchanged_selected_batch_events_have_no_change_rows(injection_source):
+def test_explicit_batch_rejects_an_id_that_cannot_move(injection_source):
     entry = batch_recipe(ids=["event-0-Work", "event-1-Work"], center="2026-01-01T10:00:00Z")
-    _, manifest, changes = create_variant(injection_source, [entry])
-    assert manifest["injections"][0]["selection"]["resolved"]["event_ids"] == [
-        "event-0-Work",
-        "event-1-Work",
-    ]
-    assert changes["event_id"].tolist() == ["event-1-Work"]
-    assert manifest["injections"][0]["affected"]["event_count"] == 1
+    with pytest.raises(ValueError, match="every explicit event_id must be movable"):
+        create_variant(injection_source, [entry])
 
 
 @pytest.mark.parametrize(
@@ -221,7 +371,7 @@ def test_infeasible_batch_targets_fail(injection_source, entry):
 
 def test_requested_injection_with_no_changes_is_an_error(injection_source):
     entry = batch_recipe(ids=["event-0-Start", "event-1-Start"], center="2026-01-01T08:00:00Z")
-    with pytest.raises(ValueError, match="changes no events"):
+    with pytest.raises(ValueError, match="every explicit event_id must be movable"):
         create_variant(injection_source, [entry])
 
 

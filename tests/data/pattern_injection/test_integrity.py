@@ -240,6 +240,75 @@ def test_complete_baseline_round_trip_with_typed_attributes_and_precision(
     assert_frame_equal(load_variant(output)[0], events)
 
 
+def test_legacy_batch_can_reload_with_an_unchanged_resolved_event(injection_source, tmp_path):
+    center = "2026-01-01T10:00:00+00:00"
+    events, manifest, changes = create_variant(
+        injection_source,
+        [
+            {
+                "preset": "batch_small",
+                "parameters": {"num_events": 2, "jitter_seconds": 0},
+                "target": {"event_ids": ["event-1-Work", "event-2-Work"], "center_utc": center},
+            }
+        ],
+    )
+    batch = manifest["injections"][0]
+    batch["parameters"] = {"num_events": 3, "jitter_seconds": 0}
+    selection = batch["selection"]
+    selection["requested"]["event_ids"].insert(0, "event-0-Work")
+    selection["resolved"]["event_ids"].insert(0, "event-0-Work")
+    selection["resolved"]["case_ids"].insert(0, "case-0")
+    selection["resolved"]["assigned_timestamps_utc"]["event-0-Work"] = center
+    batch["target_regions"][0]["case_scope"]["case_ids"] = selection["resolved"]["case_ids"]
+
+    output = save_variant(events, manifest, changes, tmp_path / "legacy")
+    reloaded, stored, reloaded_changes = load_variant(output)
+    assert_frame_equal(reloaded, events)
+    assert_frame_equal(reloaded_changes, changes)
+    assert "min_events" not in stored["injections"][0]["parameters"]
+
+    stored["injections"][0]["parameters"]["min_events"] = 2
+    (output / "manifest.json").write_text(json.dumps(stored))
+    with pytest.raises(
+        ValueError, match="Resolved target event IDs do not agree with change records"
+    ):
+        load_variant(output)
+
+
+def test_saved_interval_bounds_automatic_center_for_new_batches(injection_source, tmp_path):
+    end = "2026-01-01T11:30:00Z"
+    output = save_variant(
+        *create_variant(
+            injection_source,
+            [
+                {
+                    "preset": "batch_small",
+                    "parameters": {"num_events": 2, "jitter_seconds": 0},
+                    "target": {
+                        "activities": ["Work"],
+                        "start_utc": "2026-01-01T10:00:00Z",
+                        "end_utc": end,
+                        "center_utc": end,
+                    },
+                }
+            ],
+        ),
+        tmp_path / "center",
+    )
+    _, stored, _ = load_variant(output)
+    batch = stored["injections"][0]
+    assert pd.Timestamp(batch["selection"]["resolved"]["center_utc"]) == pd.Timestamp(end)
+    path = output / "manifest.json"
+    del batch["selection"]["requested"]["center_utc"]
+    path.write_text(json.dumps(stored))
+    with pytest.raises(ValueError, match="Automatic batch center must satisfy"):
+        load_variant(output)
+
+    del batch["parameters"]["min_events"]
+    path.write_text(json.dumps(stored))
+    assert load_variant(output)[1] == stored
+
+
 def test_optional_original_provenance_is_not_invented(injection_source):
     path = injection_source.with_suffix(".json")
     metadata = json.loads(path.read_text())

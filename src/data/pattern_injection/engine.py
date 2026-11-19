@@ -189,9 +189,20 @@ def resolve_cutoff(frame: pd.DataFrame, target: dict, seed: int) -> dict:
 
 
 def _feasible_batch_centers(
-    centers: list[int], eligible: pd.DataFrame, bounds: pd.DataFrame, jitter: int, count: int
-) -> set[int]:
-    """Sweep window boundaries once, counting distinct cases and possible edits."""
+    eligible: pd.DataFrame,
+    bounds: pd.DataFrame,
+    jitter: int,
+    count: int,
+    minimum: int,
+    center_range: tuple[int, int],
+) -> list[int]:
+    """Return candidate centers with the largest achievable batch up to count."""
+    first = max(center_range[0], pd.Timestamp.min.value + jitter)
+    last = min(center_range[1], pd.Timestamp.max.value - jitter)
+    if first > last:
+        return []
+
+    candidates = {first, last}
     edges = []
     for case, timestamp, (lower, upper) in zip(
         eligible[CASE_ID_COLUMN],
@@ -200,35 +211,33 @@ def _feasible_batch_centers(
         strict=True,
     ):
         low, high, original = lower.value, upper.value, timestamp.value
-        # A None owner counts possible modifications; case owners count distinct
-        # feasible cases even when several of their events have overlapping windows.
-        for start, end, owner in (
-            (low, high, case),
-            (low, min(high, original - 1), None),
-            (max(low, original + 1), high, None),
-        ):
+        if first <= original <= last:
+            candidates.add(original)
+        # Exclude the original destination before expanding by jitter.
+        for start, end in ((low, min(high, original - 1)), (max(low, original + 1), high)):
             if start <= end:
-                edges.extend([(start - jitter, 1, owner), (end + jitter + 1, -1, owner)])
+                start, end = max(first, start - jitter), min(last, end + jitter)
+                if start <= end:
+                    candidates.update((start, end))
+                    edges.extend(((start, 1, case), (end + 1, -1, case)))
     edges.sort(key=lambda edge: edge[0])
     active = {}
-    case_count = movable_count = position = 0
-    feasible = set()
-    for center in centers:
+    case_count = position = 0
+    best_size = minimum
+    feasible = []
+    for center in sorted(candidates):
         while position < len(edges) and edges[position][0] <= center:
-            _, delta, owner = edges[position]
-            if owner is None:
-                movable_count += delta
-            else:
-                previous = active.get(owner, 0)
-                active[owner] = previous + delta
-                case_count += int(active[owner] > 0) - int(previous > 0)
+            _, delta, case = edges[position]
+            previous = active.get(case, 0)
+            active[case] = previous + delta
+            case_count += int(active[case] > 0) - int(previous > 0)
             position += 1
-        if (
-            case_count >= count
-            and movable_count > 0
-            and pd.Timestamp.min.value + jitter <= center <= pd.Timestamp.max.value - jitter
-        ):
-            feasible.add(center)
+        size = min(case_count, count)
+        if size > best_size:
+            best_size = size
+            feasible.clear()
+        if size == best_size:
+            feasible.append(center)
     return feasible
 
 
@@ -236,20 +245,20 @@ def resolve_batch_target(frame: pd.DataFrame, target: dict, parameters: dict, se
     """Select at most one event per case and sample within feasible jitter bounds.
 
     Neighbor timestamps and original source-row tie order bound each assignment.
-    Seeded centers come from eligible timestamps and feasible window boundaries
-    within the current log's time range. Feasible centers are computed in one
-    boundary sweep, with at least one possible modifying assignment. Automatic
-    event selection prefers modifying events/cases; explicit IDs are never substituted.
+    Automatic centers stay within the log's time range and any requested
+    half-open interval. Every selected event can change its timestamp, including
+    events specified by explicit IDs.
     """
     validate_seed(seed)
     eligible = select_target_events(frame, target).set_index(EVENT_ID_COLUMN, drop=False)
     count = parameters["num_events"]
-    if eligible[CASE_ID_COLUMN].nunique() < count:
-        raise ValueError("Infeasible batch target: fewer eligible distinct cases than num_events")
-    if "event_ids" in target and (
-        len(eligible) != count or eligible[CASE_ID_COLUMN].nunique() != count
-    ):
+    explicit_ids = "event_ids" in target
+    minimum = count if explicit_ids else parameters.get("min_events", count)
+    eligible_cases = eligible[CASE_ID_COLUMN].nunique()
+    if explicit_ids and (len(eligible) != count or eligible_cases != count):
         raise ValueError("Explicit batch event_ids must match num_events and use distinct cases")
+    if eligible_cases < minimum:
+        raise ValueError(f"Infeasible batch target: fewer than {minimum} eligible distinct cases")
     try:
         jitter = pd.Timedelta(parameters["jitter_seconds"], unit="s")
     except (ValueError, OverflowError) as error:
@@ -275,65 +284,51 @@ def resolve_batch_target(frame: pd.DataFrame, target: dict, parameters: dict, se
     )
     rng = random.Random(seed)
     if "center_utc" in target:
-        centers = [utc_timestamp(target["center_utc"], "center_utc")]
+        center = utc_timestamp(target["center_utc"], "center_utc")
     else:
         earliest, latest = frame[TIMESTAMP_COLUMN].min().value, frame[TIMESTAMP_COLUMN].max().value
-        candidates = {timestamp.value for timestamp in eligible[TIMESTAMP_COLUMN]}
-        for low, high in bounds.itertuples(index=False, name=None):
-            candidates.add(max(earliest, min(latest, low.value - jitter.value)))
-            candidates.add(max(earliest, min(latest, high.value + jitter.value)))
-        candidates = sorted(candidates)
-        feasible_centers = _feasible_batch_centers(
-            candidates, eligible, bounds, jitter.value, count
+        if "start_utc" in target:
+            earliest = max(earliest, utc_timestamp(target["start_utc"], "start_utc").value)
+            latest = min(latest, utc_timestamp(target["end_utc"], "end_utc").value - 1)
+        centers = _feasible_batch_centers(
+            eligible, bounds, jitter.value, count, minimum, (earliest, latest)
         )
-        centers = [pd.Timestamp(value, tz="UTC") for value in candidates]
-        rng.shuffle(centers)
-        centers = [center for center in centers if center.value in feasible_centers]
-    if not centers:
-        raise ValueError(
-            "Infeasible batch target: no center permits enough cases and a timestamp change"
-        )
-    center = centers[0]
+        if not centers:
+            raise ValueError("Infeasible batch target: no center lets enough distinct cases move")
+        center = pd.Timestamp(rng.choice(centers), tz="UTC")
     try:
         low = bounds["lower"].clip(lower=center - jitter)
         high = bounds["upper"].clip(upper=center + jitter)
     except (ValueError, OverflowError) as error:
         raise ValueError(f"Infeasible center/jitter window: {error}") from error
-    feasible = eligible.loc[low.le(high)]
-    choices = feasible.groupby(CASE_ID_COLUMN)[EVENT_ID_COLUMN].agg(sorted).to_dict()
-    if len(choices) < count:
-        raise ValueError(
-            "Infeasible batch target: not enough distinct cases within predecessor/successor bounds"
-        )
-    moving = feasible.loc[
-        low.loc[feasible.index].ne(feasible[TIMESTAMP_COLUMN])
-        | high.loc[feasible.index].ne(feasible[TIMESTAMP_COLUMN])
-    ]
+    original_times = eligible[TIMESTAMP_COLUMN]
+    moving = eligible.loc[low.le(high) & (low.ne(original_times) | high.ne(original_times))]
     moving_choices = moving.groupby(CASE_ID_COLUMN)[EVENT_ID_COLUMN].agg(sorted).to_dict()
-    if "event_ids" in target or len(moving_choices) >= count:
-        cases = rng.sample(sorted(choices if "event_ids" in target else moving_choices), count)
-    else:
-        cases = sorted(moving_choices) + rng.sample(
-            sorted(set(choices) - set(moving_choices)), count - len(moving_choices)
+    if len(moving_choices) < minimum:
+        if explicit_ids:
+            raise ValueError("Infeasible batch target: every explicit event_id must be movable")
+        raise ValueError(
+            f"Infeasible batch target: too few distinct cases can move (need {minimum})"
         )
-    chosen = [rng.choice(moving_choices.get(case, choices[case])) for case in cases]
+    cases = rng.sample(sorted(moving_choices), min(count, len(moving_choices)))
+    chosen = sorted(rng.choice(moving_choices[case]) for case in cases)
     assignments = {}
-    for event_id in sorted(chosen):
+    for event_id in chosen:
         start, end = low.loc[event_id].value, high.loc[event_id].value
-        original = eligible.loc[event_id, TIMESTAMP_COLUMN].value
-        if start <= original <= end and start < end:
+        original = original_times.loc[event_id].value
+        if start <= original <= end:
             timestamp = rng.randint(start, end - 1)
             timestamp += int(timestamp >= original)
         else:
             timestamp = rng.randint(start, end)
         assignments[event_id] = pd.Timestamp(timestamp, tz="UTC").isoformat()
-    selected = eligible.loc[sorted(chosen)]
+    selected = eligible.loc[chosen]
     return {
         "mode": "explicit" if target else "seeded",
         "requested": copy.deepcopy(target),
         "resolved": {
             "center_utc": center.isoformat(),
-            "event_ids": sorted(chosen),
+            "event_ids": chosen,
             "case_ids": sorted(selected[CASE_ID_COLUMN].unique()),
             "activities": sorted(selected[ACTIVITY_COLUMN].unique()),
             "assigned_timestamps_utc": assignments,
@@ -611,12 +606,15 @@ def _validate_batch_update(before: pd.DataFrame, after: pd.DataFrame, injection:
     ids = resolved["event_ids"]
     selected = before.loc[ids]
     center = utc_timestamp(resolved.get("center_utc"), "center_utc")
-    jitter = pd.Timedelta(injection["parameters"]["jitter_seconds"], unit="s")
+    parameters = injection["parameters"]
+    jitter = pd.Timedelta(parameters["jitter_seconds"], unit="s")
     assigned = resolved.get("assigned_timestamps_utc")
     requested = injection["selection"]["requested"]
+    count = parameters["num_events"]
+    minimum = count if "event_ids" in requested else parameters.get("min_events", count)
     eligible = select_target_events(before.reset_index(drop=True), requested)
     if (
-        len(ids) != injection["parameters"]["num_events"]
+        not minimum <= len(ids) <= count
         or selected[CASE_ID_COLUMN].nunique() != len(ids)
         or set(ids) - set(eligible[EVENT_ID_COLUMN])
         or ("event_ids" in requested and set(ids) != set(requested["event_ids"]))
@@ -632,6 +630,13 @@ def _validate_batch_update(before: pd.DataFrame, after: pd.DataFrame, injection:
         raise ValueError(
             "Batch resolved targets do not match its settings or case/activity selection"
         )
+    if "min_events" in parameters and "center_utc" not in requested and "start_utc" in requested:
+        start = utc_timestamp(requested["start_utc"], "start_utc")
+        end = utc_timestamp(requested["end_utc"], "end_utc")
+        if not start <= center < end:
+            raise ValueError(
+                "Automatic batch center must satisfy start_utc <= center_utc < end_utc"
+            )
     for event_id, timestamp in after[TIMESTAMP_COLUMN].items():
         if (
             utc_timestamp(assigned[event_id], "assigned timestamp") != timestamp
@@ -679,12 +684,13 @@ def validate_variant(
             or rows[["before_values_json", "after_values_json"]].notna().any().any()
         ):
             raise ValueError("Immediate change records do not agree with the resulting event log")
-        resolved_ids = injection["selection"]["resolved"].get("event_ids")
+        resolved_ids = injection["selection"]["resolved"]["event_ids"]
+        resolved_id_set = set(resolved_ids)
+        changed_id_set = set(ids)
         if (
-            not isinstance(resolved_ids, list)
-            or len(set(resolved_ids)) != len(resolved_ids)
-            or not set(ids).issubset(resolved_ids)
-            or set(resolved_ids) - set(restored.index)
+            not changed_id_set.issubset(resolved_id_set)
+            or resolved_id_set - set(restored.index)
+            or ("min_events" in injection["parameters"] and changed_id_set != resolved_id_set)
         ):
             raise ValueError("Resolved target event IDs do not agree with change records")
         selected_after = restored.loc[resolved_ids].copy()
@@ -733,6 +739,11 @@ def _resolve_recipe(recipe: list[dict], catalog: dict, seed: int) -> list[dict]:
     return resolved
 
 
+def _reject_overlapping_targets(changed_ids: set[str], event_ids: Iterable[str]) -> None:
+    if changed_ids.intersection(event_ids):
+        raise ValueError("Overlapping injections: a later target includes an already changed event")
+
+
 def create_variant(
     input_path: Path | str,
     recipe: list[dict],
@@ -776,6 +787,15 @@ def create_variant(
     tables = []
     for order, setting in enumerate(settings, 1):
         injection_id = f"inj_{order:03d}"
+        changed_ids = {event_id for table in tables for event_id in table["event_id"]}
+        if (
+            changed_ids
+            and setting["strategy"] == "synchronize_events"
+            and "event_ids" in setting["target"]
+        ):
+            _reject_overlapping_targets(
+                changed_ids, _id_list(setting["target"]["event_ids"], "event_ids")
+            )
         target = (
             resolve_cutoff(events, setting["target"], setting["seed"])
             if setting["strategy"] == "shift_suffix"
@@ -783,11 +803,7 @@ def create_variant(
                 events, setting["target"], setting["parameters"], setting["seed"]
             )
         )
-        changed_ids = {event_id for table in tables for event_id in table["event_id"]}
-        if changed_ids.intersection(target["resolved"]["event_ids"]):
-            raise ValueError(
-                "Overlapping injections: a later target includes an already changed event"
-            )
+        _reject_overlapping_targets(changed_ids, target["resolved"]["event_ids"])
         transformed, regions = STRATEGIES[setting["strategy"]](
             events, setting["parameters"], target, setting["seed"]
         )
